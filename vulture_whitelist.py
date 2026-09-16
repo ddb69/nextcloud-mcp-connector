@@ -249,3 +249,15 @@ _.exchange_identity_assertion
 _.set_cookie
 _.add_cookie_header
 _.cookie
+
+# --- The code primitive that BL-19 left to the tests ------------------------------------
+# create_auth_code writes one authorization code and nothing else. Until BL-19 the consent
+# screen called it and then deleted the flow, and that pair was the check then act which let
+# two parallel approvals mint two codes for one consent. redeem_flow_for_code replaced the
+# pair with a single compare and set and is now the only production path to a code.
+#
+# The primitive stays because the tests need a code without a flow: the rotation, provider
+# and abuse suites assert what happens to an existing code (exchange, replay, revocation,
+# ownership), and routing each of them through a flow would add setup that says nothing
+# about the thing under test. tests/unit/test_oauth_store.py drives it directly.
+_.create_auth_code
