@@ -727,3 +727,19 @@ BEGIN-IMMEDIATE-Transaktion, exakt nach dem Muster von redeem_auth_code
 **Verbindlichkeit:** In Issue #5 oeffentlich uebernommen ("I will take that
 one", comment 5692350130). VOR deren Standalone-PR ausliefern, weil die
 zweite Identitaetsquelle die Angriffsflaeche des Race vergroessert.
+
+## BL-20: Paused-Zweig in _decide claimt den Flow nicht (Nachlaeufer zu BL-19)
+
+**Found:** 2026-09-16, beim Review von PR #6 gegen den frischen BL-19-Fix.
+Der Paused-Zweig (_withdraw bei consent.py ~605) loescht den Flow ohne
+redeem_flow-Claim: ein Paused-Withdraw parallel zu einem Approve kann einen
+Code hinterlassen, dessen Authorization geloescht ist. Faellt beim
+Token-Exchange fail-closed (kein Schaden), aber inkonsistent zum
+BL-19-Muster.
+
+**Fix (klein):** redeem_flow-Claim auch im Paused-Zweig vor _withdraw,
+plus Paralleltest Paused-vs-Approve nach dem Barrier-Muster der
+BL-19-Tests. Zeitlich unkritisch; VOR dem Merge von PR #6 erledigen,
+damit DaniW42 nur einmal rebased.
+
+**Status:** OPEN
