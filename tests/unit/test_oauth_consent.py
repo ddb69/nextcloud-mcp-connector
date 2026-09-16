@@ -22,6 +22,7 @@ import json
 import logging
 import re
 import sqlite3
+import threading
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -1211,6 +1212,219 @@ def test_a_second_decision_on_the_same_flow_creates_nothing_more(store: OAuthSto
     assert second.status_code == 400
     assert len(rows(store, "auth_codes")) == 1
     assert len(rows(store, "authorizations")) == 1
+
+
+# --- BL-19: two decisions on one flow that arrive at the same moment ----------------------
+#
+# The second press of the button was always refused, but only because the first one had
+# already finished: the write was an insert of a code followed by a delete of the flow, after
+# a read that had found the flow. Two decisions that pass that read before either of them
+# writes are the same press twice as far as the store is concerned, and until this section
+# existed, both of them wrote. One consent then carried two codes, which is the one promise
+# an authorization code makes.
+
+
+def _both_past_the_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Hold every decision at the last read before its write, until two of them are there.
+
+    The window this opens is the real one, not an imitation of it: the gate sits on the last
+    check :func:`consent._decide` runs, so both requests have read the flow, the client, the
+    authorization and the account switch, and the next thing either of them does is the write.
+    """
+    barrier = threading.Barrier(2, timeout=10)
+    original = consent._access_disabled
+
+    async def gated(store: OAuthStore, nc_user: str) -> bool | None:
+        answer = await original(store, nc_user)
+        await asyncio.to_thread(barrier.wait)
+        return answer
+
+    monkeypatch.setattr(consent, "_access_disabled", gated)
+
+
+def _at_once(first: Callable[[], Any], second: Callable[[], Any]) -> list[Any]:
+    """Both requests in their own thread, and both answers once they are back."""
+    answers: list[Any] = [None, None]
+    failures: list[BaseException] = []
+
+    def run(index: int, call: Callable[[], Any]) -> None:
+        try:
+            answers[index] = call()
+        except BaseException as error:
+            # Kept and raised again in the main thread, where a failure is readable.
+            failures.append(error)
+
+    threads = [
+        threading.Thread(target=run, args=(0, first)),
+        threading.Thread(target=run, args=(1, second)),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=20)
+    if failures:
+        raise failures[0]
+    assert all(answer is not None for answer in answers), "a decision never came back"
+    return answers
+
+
+def test_two_approvals_that_arrive_at_once_produce_exactly_one_code(
+    store: OAuthStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """BL-19: one consent is one code, even when the two requests overlap completely."""
+    provider = make(store)
+    register(provider)
+    client, flow_id, _page = signed_in(provider)
+    second_browser = TestClient(application(provider))
+    _both_past_the_read(monkeypatch)
+
+    answers = _at_once(
+        lambda: decide(client, flow_id, ui_consent.DECISION_APPROVE, store=store),
+        lambda: decide(second_browser, flow_id, ui_consent.DECISION_APPROVE, store=store),
+    )
+
+    assert sorted(answer.status_code for answer in answers) == [200, 400]
+    granted = next(answer for answer in answers if answer.status_code == 200)
+    refused = next(answer for answer in answers if answer.status_code == 400)
+    assert len(query_of(granted)["code"]) == 1
+    assert strings.ERROR_EXPIRED_TITLE in refused.text, "the answer a spent flow always gets"
+    assert len(rows(store, "auth_codes")) == 1, "one consent, one code"
+    assert len(rows(store, "authorizations")) == 1
+    assert asyncio.run(store.load_flow(flow_id, now=0)) is None
+
+
+def test_an_approval_and_a_denial_that_arrive_at_once_leave_one_outcome(
+    store: OAuthStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Whichever of the two wins the flow, the other one changes nothing at all."""
+    provider = make(store)
+    register(provider)
+    client, flow_id, _page = signed_in(provider)
+    second_browser = TestClient(application(provider))
+    _both_past_the_read(monkeypatch)
+
+    with respx.mock:
+        respx.delete(REVOKE_URL).mock(return_value=httpx.Response(200, json={}))
+        answers = _at_once(
+            lambda: decide(client, flow_id, ui_consent.DECISION_APPROVE, store=store),
+            lambda: decide(second_browser, flow_id, ui_consent.DECISION_DENY, store=store),
+        )
+
+    approval, denial = answers
+    assert sorted(answer.status_code for answer in answers) == [200, 400]
+    if approval.status_code == 200:
+        assert len(query_of(approval)["code"]) == 1
+        assert len(rows(store, "auth_codes")) == 1, "the grant stands, whole"
+        assert len(rows(store, "authorizations")) == 1
+    else:
+        assert query_of(denial)["error"] == ["access_denied"]
+        assert rows(store, "auth_codes") == [], "a refused connection carries no code"
+        assert rows(store, "authorizations") == []
+    assert asyncio.run(store.load_flow(flow_id, now=0)) is None
+
+
+def _spend_while_deciding(
+    monkeypatch: pytest.MonkeyPatch, store: OAuthStore, spend: Callable[[], Awaitable[object]]
+) -> None:
+    """Let the other decision win the flow after this request has read it.
+
+    The threaded tests above prove the race is closed, but which of the two wins is the
+    business of SQLite. These two run the same window with the winner known, so the loser's
+    answer and the rows it leaves are checked and not merely sampled.
+    """
+    original = consent._access_disabled
+
+    async def overtaken(subject: OAuthStore, nc_user: str) -> bool | None:
+        answer = await original(subject, nc_user)
+        await spend()
+        return answer
+
+    monkeypatch.setattr(consent, "_access_disabled", overtaken)
+
+
+def test_an_approval_that_loses_the_flow_writes_no_code(
+    store: OAuthStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The loser of the race writes nothing and answers the page a spent flow gets."""
+    provider = make(store)
+    register(provider)
+    client, flow_id, _page = signed_in(provider)
+    _spend_while_deciding(monkeypatch, store, lambda: store.redeem_flow(flow_id))
+
+    response = decide(client, flow_id, ui_consent.DECISION_APPROVE, store=store)
+
+    assert response.status_code == 400
+    assert strings.ERROR_EXPIRED_TITLE in response.text
+    assert "location" not in response.headers
+    assert rows(store, "auth_codes") == [], "the code of a decision that lost is never written"
+
+
+def test_a_denial_that_loses_the_flow_takes_nothing_back(
+    store: OAuthStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The refusing side of the same window: a late "no" may not undo a grant that happened."""
+    provider = make(store)
+    register(provider)
+    client, flow_id, _page = signed_in(provider)
+    _spend_while_deciding(
+        monkeypatch,
+        store,
+        lambda: store.redeem_flow_for_code(
+            flow_id,
+            "the-code-of-the-other-decision",
+            redirect_uri=REDIRECT,
+            code_challenge=CHALLENGE,
+            resource=RESOURCE,
+        ),
+    )
+
+    with respx.mock:
+        revoke = respx.delete(REVOKE_URL).mock(return_value=httpx.Response(200, json={}))
+        response = decide(client, flow_id, ui_consent.DECISION_DENY, store=store)
+
+    assert response.status_code == 400
+    assert strings.ERROR_EXPIRED_TITLE in response.text
+    assert revoke.call_count == 0, "the credential of the granted connection stays valid"
+    assert len(rows(store, "auth_codes")) == 1, "the code of the approval survives"
+    assert len(rows(store, "authorizations")) == 1
+
+
+def test_a_denial_after_an_approval_of_the_same_flow_takes_nothing_back(
+    store: OAuthStore,
+) -> None:
+    """The same thing one press of a button later, without any window at all."""
+    provider = make(store)
+    register(provider)
+    client, flow_id, _page = signed_in(provider)
+
+    first = decide(client, flow_id, ui_consent.DECISION_APPROVE, store=store)
+    with respx.mock:
+        revoke = respx.delete(REVOKE_URL).mock(return_value=httpx.Response(200, json={}))
+        second = decide(client, flow_id, ui_consent.DECISION_DENY, store=store)
+
+    assert first.status_code == 200
+    assert second.status_code == 400
+    assert revoke.call_count == 0
+    assert len(rows(store, "auth_codes")) == 1
+    assert len(rows(store, "authorizations")) == 1
+
+
+def test_an_approval_after_a_denial_of_the_same_flow_grants_nothing(store: OAuthStore) -> None:
+    """And the other order: what a refusal took back stays taken back."""
+    provider = make(store)
+    register(provider)
+    client, flow_id, _page = signed_in(provider)
+
+    with respx.mock:
+        respx.delete(REVOKE_URL).mock(return_value=httpx.Response(200, json={}))
+        first = decide(client, flow_id, ui_consent.DECISION_DENY, store=store)
+    second = decide(client, flow_id, ui_consent.DECISION_APPROVE, store=store)
+
+    assert first.status_code == 200
+    assert second.status_code == 400
+    assert "location" not in second.headers
+    assert rows(store, "auth_codes") == []
+    assert rows(store, "authorizations") == []
 
 
 # --- WR-06: a ciphertext that cannot be read is a page, never a 500 -----------------------

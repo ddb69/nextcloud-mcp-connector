@@ -612,6 +612,24 @@ class OAuthStore:
 
         await self._write(work)
 
+    async def redeem_flow(self, flow_id: str, *, now: int | None = None) -> bool:
+        """Spend the flow, or return ``False``. The second caller always gets ``False``.
+
+        The compare and set of :meth:`redeem_auth_code`, applied to the record a decision
+        hangs on: two requests that read the same running flow must not both act on it
+        (BL-19). The refusal belongs to the caller, which answers it as the page a flow
+        that was already decided gets.
+        """
+        moment = _moment(now)
+
+        def work(conn: sqlite3.Connection) -> bool:
+            conn.execute("BEGIN IMMEDIATE")
+            spent = _spend_flow(conn, flow_id, moment)
+            conn.execute("COMMIT")
+            return spent
+
+        return await self._transaction(work)
+
     # --- authorizations -------------------------------------------------------------
 
     async def create_authorization(
@@ -998,6 +1016,53 @@ class OAuthStore:
             )
 
         await self._write(work)
+
+    async def redeem_flow_for_code(
+        self,
+        flow_id: str,
+        code: str,
+        *,
+        redirect_uri: str,
+        code_challenge: str,
+        resource: str,
+        redirect_uri_explicit: bool = True,
+        now: int | None = None,
+    ) -> bool:
+        """Turn one running flow into exactly one code, or write nothing and return ``False``.
+
+        :meth:`create_auth_code` followed by :meth:`delete_flow` was a check then act, and
+        the consent screen is a place where two requests really do arrive at once: both
+        approvals read a flow that was still there and both wrote a code, so one consent
+        handed out two codes (BL-19). Here the deletion of the flow *is* the claim, the
+        insert runs only for the caller whose deletion found the row, and the two are one
+        ``BEGIN IMMEDIATE`` transaction, so the loser leaves nothing behind at all.
+        """
+        moment = _moment(now)
+
+        def work(conn: sqlite3.Connection) -> bool:
+            conn.execute("BEGIN IMMEDIATE")
+            if not _spend_flow(conn, flow_id, moment):
+                conn.execute("COMMIT")
+                return False
+            _purge_expired_rows(conn, moment)
+            conn.execute(
+                "INSERT INTO auth_codes (code_hash, auth_id, redirect_uri, "
+                "redirect_uri_explicit, code_challenge, resource, expires_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    token_hash(code),
+                    flow_id,
+                    redirect_uri,
+                    int(redirect_uri_explicit),
+                    code_challenge,
+                    resource,
+                    moment + AUTH_CODE_TTL,
+                ),
+            )
+            conn.execute("COMMIT")
+            return True
+
+        return await self._transaction(work)
 
     async def load_auth_code(self, code: str, *, now: int | None = None) -> AuthCodeRow | None:
         """A code that is still redeemable, or ``None``. Reads, never consumes.
@@ -1541,6 +1606,19 @@ def _insert_refresh_token(
         "expires_at) VALUES (?, ?, ?, ?, ?, ?)",
         (digest, auth_id, family_id, STATE_ACTIVE, moment, moment + REFRESH_TOKEN_TTL),
     )
+
+
+def _spend_flow(conn: sqlite3.Connection, flow_id: str, moment: int) -> bool:
+    """Delete one running flow, and say whether this caller is the one that deleted it.
+
+    ``expires_at`` is part of the condition for the reason :meth:`OAuthStore.load_flow`
+    carries it: a row that ran out of time is not a running flow any more, so a claim on it
+    may not succeed either. Called inside a transaction the caller opened, never on its own.
+    """
+    cursor = conn.execute(
+        "DELETE FROM flows WHERE flow_id = ? AND expires_at > ?", (flow_id, moment)
+    )
+    return cursor.rowcount == 1
 
 
 def _purge_expired_rows(conn: sqlite3.Connection, moment: int) -> None:

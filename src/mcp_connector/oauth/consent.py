@@ -625,23 +625,32 @@ async def _approve(
 
     The code is the only thing this step creates: the authorization itself was written when
     the sign in finished, under the id of its own flow, which is why the code points at the
-    flow id (plan 03-05). The flow is deleted in the same breath, so a second press of the
+    flow id (plan 03-05). The flow is spent in the same breath, so a second press of the
     same button finds nothing to approve twice.
+
+    "In the same breath" is one transaction since BL-19, and it has to be. The write used to
+    be an insert followed by a delete, after a read that had found the flow: two approvals of
+    the same flow that arrived at once both passed the read and both wrote a code, so one
+    consent handed out two of them. :meth:`OAuthStore.redeem_flow_for_code` makes the
+    deletion the claim and the code its consequence, and the caller that does not get the row
+    gets the answer the second press of the button gets, because that is what it is.
     """
     code = secrets.token_urlsafe(CODE_BYTES)
     try:
-        await store.create_auth_code(
+        granted = await store.redeem_flow_for_code(
+            row.flow_id,
             code,
-            auth_id=row.flow_id,
             redirect_uri=row.redirect_uri,
             redirect_uri_explicit=row.redirect_uri_explicit,
             code_challenge=row.code_challenge,
             resource=row.resource,
         )
-        await store.delete_flow(row.flow_id)
     except Exception:
         logger.exception("the approved authorization could not be written to the store")
         return _generic("the authorization code could not be written", env)
+    if not granted:
+        logger.info("an approval arrived for a flow another decision had already spent")
+        return _page(errors.error_page("E3", env=env))
 
     if not row.redirect_uri:
         return connected_page(_name(client), user, env=env)
@@ -677,7 +686,16 @@ async def _deny(
     leave a working credential behind, so it is handed back here: one attempt, no retry,
     and the row goes even when that attempt fails, because a connection the user refused
     must not survive a cleanup step that did not work (D-34, D-37).
+
+    The flow is claimed first, the same compare and set the approval runs (BL-19): a refusal
+    that arrives while an approval of the same flow is underway must not take back what the
+    other one just granted, and the second of the two decisions is the second press of the
+    button, whichever button it was.
     """
+    if not await store.redeem_flow(row.flow_id):
+        logger.info("a denial arrived for a flow another decision had already spent")
+        return _page(errors.error_page("E3", env=env))
+
     await _withdraw(store, row, user, env)
 
     if not row.redirect_uri:

@@ -852,6 +852,142 @@ async def test_an_expired_flow_is_gone_instead_of_usable(tmp_path: Path) -> None
     assert await subject.load_flow("flow-old") is None
 
 
+async def with_a_running_flow(
+    subject: store.OAuthStore, flow_id: str = "flow-0001", *, now: int | None = None
+) -> None:
+    """A flow that reached the consent screen: its client, its authorization and its row.
+
+    The authorization carries the id of the flow, which is how this phase writes it: the
+    code of an approval points at the flow id (plan 03-05), so the foreign key of
+    ``auth_codes`` only holds when the authorization was written under the same id.
+    """
+    await with_client(subject, now=now)
+    await subject.create_authorization(
+        flow_id,
+        client_id=CLIENT_ID,
+        nc_user=NC_USER,
+        app_password=APP_PASSWORD,
+        scopes=SCOPES,
+        resource=RESOURCE,
+        now=now,
+    )
+    await subject.create_flow(
+        flow_id,
+        client_id=CLIENT_ID,
+        redirect_uri=REDIRECT_URI,
+        redirect_uri_explicit=True,
+        code_challenge=CHALLENGE,
+        state=None,
+        scopes=SCOPES,
+        resource=RESOURCE,
+        poll_token=POLL_TOKEN,
+        now=now,
+    )
+
+
+@pytest.mark.anyio
+async def test_a_flow_becomes_exactly_one_authorization_code(tmp_path: Path) -> None:
+    """BL-19: the claim and the code are one transaction, and the code is what it used to be."""
+    subject = open_store(tmp_path)
+    await with_a_running_flow(subject)
+
+    granted = await subject.redeem_flow_for_code(
+        "flow-0001",
+        AUTH_CODE,
+        redirect_uri=REDIRECT_URI,
+        redirect_uri_explicit=True,
+        code_challenge=CHALLENGE,
+        resource=RESOURCE,
+    )
+
+    assert granted is True
+    assert await subject.load_flow("flow-0001") is None, "the flow is spent by the grant"
+    row = await subject.load_auth_code(AUTH_CODE)
+    assert row is not None
+    assert row.auth_id == "flow-0001"
+    assert row.redirect_uri == REDIRECT_URI
+    assert row.redirect_uri_explicit is True
+    assert row.code_challenge == CHALLENGE
+    assert row.resource == RESOURCE
+
+
+@pytest.mark.anyio
+async def test_two_parallel_approvals_of_one_flow_produce_one_code(tmp_path: Path) -> None:
+    """BL-19: one consent, one code. The check then act let both callers write one."""
+    subject = open_store(tmp_path)
+    await with_a_running_flow(subject)
+
+    results = await asyncio.gather(
+        subject.redeem_flow_for_code(
+            "flow-0001",
+            AUTH_CODE,
+            redirect_uri=REDIRECT_URI,
+            code_challenge=CHALLENGE,
+            resource=RESOURCE,
+        ),
+        subject.redeem_flow_for_code(
+            "flow-0001",
+            "the-code-of-the-second-request",
+            redirect_uri=REDIRECT_URI,
+            code_challenge=CHALLENGE,
+            resource=RESOURCE,
+        ),
+    )
+
+    assert sum(1 for granted in results if granted) == 1, "exactly one of the two wrote"
+    assert counts(tmp_path)["auth_codes"] == 1
+    assert counts(tmp_path)["flows"] == 0
+
+
+@pytest.mark.anyio
+async def test_a_spent_unknown_or_expired_flow_yields_no_code(tmp_path: Path) -> None:
+    """The three ways there is no running flow to claim, and none of them writes a code."""
+    subject = open_store(tmp_path)
+    await with_a_running_flow(subject)
+    await with_a_running_flow(subject, "flow-old", now=int(time.time()) - store.FLOW_TTL - 1)
+
+    assert await subject.redeem_flow("flow-0001") is True
+    spent = await subject.redeem_flow_for_code(
+        "flow-0001",
+        AUTH_CODE,
+        redirect_uri=REDIRECT_URI,
+        code_challenge=CHALLENGE,
+        resource=RESOURCE,
+    )
+    unknown = await subject.redeem_flow_for_code(
+        "no-such-flow",
+        AUTH_CODE,
+        redirect_uri=REDIRECT_URI,
+        code_challenge=CHALLENGE,
+        resource=RESOURCE,
+    )
+    expired = await subject.redeem_flow_for_code(
+        "flow-old",
+        AUTH_CODE,
+        redirect_uri=REDIRECT_URI,
+        code_challenge=CHALLENGE,
+        resource=RESOURCE,
+    )
+
+    assert (spent, unknown, expired) == (False, False, False)
+    assert counts(tmp_path)["auth_codes"] == 0
+
+
+@pytest.mark.anyio
+async def test_a_flow_is_claimed_by_exactly_one_of_two_parallel_decisions(tmp_path: Path) -> None:
+    """The claim without a code, which is what a refusal of a flow runs (BL-19)."""
+    subject = open_store(tmp_path)
+    await with_a_running_flow(subject)
+
+    results = await asyncio.gather(
+        subject.redeem_flow("flow-0001"), subject.redeem_flow("flow-0001")
+    )
+
+    assert sum(1 for claimed in results if claimed) == 1
+    assert await subject.redeem_flow("flow-0001") is False
+    assert await subject.redeem_flow("no-such-flow") is False
+
+
 @pytest.mark.anyio
 async def test_an_authorization_code_can_be_redeemed_exactly_once(tmp_path: Path) -> None:
     subject = open_store(tmp_path)
