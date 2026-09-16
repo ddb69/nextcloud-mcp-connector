@@ -701,6 +701,17 @@ arrives.
 
 ## BL-19: Concurrent-Approval-Race in _decide fixen (zugesagt in Issue #5)
 
+**STATUS 2026-09-16: DONE** (commit 84062cf): `store.redeem_flow_for_code` macht die
+Loeschung des Flows zur Beanspruchung und schreibt den Code nur bei `rowcount == 1`,
+beides in einer `BEGIN IMMEDIATE`-Transaktion nach dem Muster von `redeem_auth_code`.
+`store.redeem_flow` ist derselbe Claim ohne Code und deckt die ablehnende Seite ab, damit
+ein spaetes "Nein" nicht zuruecknimmt, was eine gleichzeitige Zustimmung gerade erteilt
+hat. Der Verlierer des Rennens bekommt die Seite, die ein verbrauchter Flow immer bekam
+(E3, 400), kein 500. Tests: zwei Decides gleichzeitig ueber zwei Threads, beide an der
+letzten Lesung vor dem Schreiben angehalten, dazu der deterministische Verlierer beider
+Knoepfe und die drei Faelle ohne laufenden Flow an der Store-Grenze. Kein API- oder
+Schema-Wechsel, bestehende Tests unveraendert.
+
 **Found:** 2026-09-16, beim Code-Review von DaniW42s Standalone-OAuth-Design
 (Issue #5); von uns reproduziert: zwei parallele POST /authorize/decide auf
 denselben Flow liefern zwei Auth-Codes aus einer Zustimmung. Keine

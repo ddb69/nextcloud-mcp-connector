@@ -9,6 +9,23 @@ All notable changes to this app are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Nothing here is released.
+
+### Fixed
+
+- One consent handed out exactly one authorization code, which is what an authorization code
+  promises. Two approvals of the same connection that arrived at the same moment both passed
+  the check that the connection was still waiting for a decision, and both wrote a code: the
+  write was an insert followed by a delete of the pending flow, so neither of them could see
+  the other. The two are one database transaction now, the deletion of the pending flow is the
+  claim, and the code is written only for the request that made the claim. The second request
+  gets the page it already got when it arrived a moment later, and a refusal that loses the
+  same race no longer takes back a connection the approval had just granted. Nothing about
+  this changes what a client sends or receives, and no code that was ever handed out could
+  reach further than the single connection it belonged to.
+
 ## [0.1.13] - 2026-09-11
 
 One fix, and it is the reason this release exists so soon after 0.1.12: on Nextcloud AIO with
