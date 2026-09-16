@@ -13,6 +13,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Nothing here is released.
 
+### Added
+
+- The app installs on Nextcloud 35 ("Hub 26 Summer", released 2026-09-15). The declared
+  window was `32` to `34`, and Nextcloud 35 refused the app outright with "not compatible
+  with this version of the server", which also hit people who merely upgraded their server.
+  The window now ends at 35. It was raised against a running 35.0.0 instance rather than
+  against the release notes: the manifest is refused at 34 and accepted at 35, AppAPI 35.0.0
+  ships and enables, and the three headers and two OCS routes this app depends on exist
+  unchanged. `docs/nc35-evidence.md` records what was run, and names the end-to-end run
+  through HaRP as the half that is still open.
+
 ### Fixed
 
 - One consent handed out exactly one authorization code, which is what an authorization code

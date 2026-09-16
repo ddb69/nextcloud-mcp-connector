@@ -160,9 +160,14 @@ Prérequis :
 		<!--
 		  - min 32: HaRP is the recommended deploy daemon from Nextcloud 32 on, and the
 		  - Docker Socket Proxy it replaces is scheduled for removal in Nextcloud 35.
-		  - max 34: 34 is what this app is tested against.
+		  - max 35: raised on 2026-09-16, the day after Nextcloud 35 (Hub 26 Summer)
+		  - was released. The evidence is in docs/nc35-evidence.md and was gathered
+		  - against a running 35.0.0 instance, not against a claim: the manifest is
+		  - refused at max 34 and accepted at max 35, AppAPI 35.0.0 ships and enables,
+		  - and the three headers plus the two OCS routes this app depends on exist
+		  - unchanged. The end-to-end run through HaRP is named as the open half there.
 		-->
-		<nextcloud min-version="32" max-version="34"/>
+		<nextcloud min-version="32" max-version="35"/>
 	</dependencies>
 	<external-app>
 		<docker-install>
