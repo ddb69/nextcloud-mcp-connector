@@ -1427,6 +1427,128 @@ def test_an_approval_after_a_denial_of_the_same_flow_grants_nothing(store: OAuth
     assert rows(store, "authorizations") == []
 
 
+# --- BL-20: the withdrawal of a paused account is a decision like the other two -----------
+#
+# The paused branch of ``_decide`` runs the denial path and answers a page of its own, and
+# until this section existed it ran that path without the claim the two buttons took in
+# BL-19. So a pause that arrived while an approval of the same flow was underway took back
+# what the approval had just granted: the authorization was deleted, its app password was
+# handed back, and the code of the approval stayed behind pointing at nothing. The token
+# exchange refuses such a code, so nothing was ever granted twice, but the rows of one
+# consent disagreed with each other, which is the state BL-19 exists against.
+
+
+def _one_pauses_past_the_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Hold two decisions at the same last read, and let exactly one of them see the pause.
+
+    The window of BL-20 is the window of BL-19 with the account switch flipped inside it: two
+    tabs stand open, the person pauses their access, and the decision that read the switch
+    before the pause approves while the one that read it after withdraws. A switch both of
+    them read out of the store would send both down the same branch and prove nothing, so the
+    answer is handed out per caller here, and neither moves before the other has one.
+    """
+    barrier = threading.Barrier(2, timeout=10)
+    answers = iter([False, True])
+    lock = threading.Lock()
+
+    async def gated(_store: OAuthStore, _nc_user: str) -> bool | None:
+        with lock:
+            answer = next(answers)
+        await asyncio.to_thread(barrier.wait)
+        return answer
+
+    monkeypatch.setattr(consent, "_access_disabled", gated)
+
+
+def test_a_pause_and_an_approval_that_arrive_at_once_leave_one_outcome(
+    store: OAuthStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """BL-20: either a code and no withdrawal, or a withdrawal and no code. Never both."""
+    provider = make(store)
+    register(provider)
+    client, flow_id, _page = signed_in(provider)
+    second_browser = TestClient(application(provider))
+    _one_pauses_past_the_read(monkeypatch)
+
+    with respx.mock:
+        revoke = respx.delete(REVOKE_URL).mock(return_value=httpx.Response(200, json={}))
+        answers = _at_once(
+            lambda: decide(client, flow_id, ui_consent.DECISION_APPROVE, store=store),
+            lambda: decide(second_browser, flow_id, ui_consent.DECISION_APPROVE, store=store),
+        )
+
+    statuses = sorted(answer.status_code for answer in answers)
+    if 200 in statuses:
+        assert statuses == [200, 400], "the pause lost, and it lost as a spent flow does"
+        granted = next(answer for answer in answers if answer.status_code == 200)
+        refused = next(answer for answer in answers if answer.status_code == 400)
+        assert len(query_of(granted)["code"]) == 1
+        assert strings.ERROR_EXPIRED_TITLE in refused.text
+        assert revoke.call_count == 0, "the credential of the granted connection stays valid"
+        assert len(rows(store, "auth_codes")) == 1, "the grant stands, whole"
+        assert len(rows(store, "authorizations")) == 1
+    else:
+        assert statuses == [400, 403], "the pause won, and the approval got the spent flow"
+        withdrawn = next(answer for answer in answers if answer.status_code == 403)
+        assert strings.CONNECTIONS_PAUSED_TITLE in withdrawn.text
+        assert revoke.call_count == 1, "one attempt, and the app password goes back"
+        assert rows(store, "auth_codes") == [], "a withdrawn connection carries no code"
+        assert rows(store, "authorizations") == []
+    assert asyncio.run(store.load_flow(flow_id, now=0)) is None
+
+
+def test_a_pause_that_loses_the_flow_takes_nothing_back(
+    store: OAuthStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same window with the winner known: a late pause may not undo a grant that happened."""
+    provider = make(store)
+    register(provider)
+    client, flow_id, _page = signed_in(provider)
+    paused(store)
+    _spend_while_deciding(
+        monkeypatch,
+        store,
+        lambda: store.redeem_flow_for_code(
+            flow_id,
+            "the-code-of-the-approval-that-won",
+            redirect_uri=REDIRECT,
+            code_challenge=CHALLENGE,
+            resource=RESOURCE,
+        ),
+    )
+
+    with respx.mock:
+        revoke = respx.delete(REVOKE_URL).mock(return_value=httpx.Response(200, json={}))
+        response = decide(client, flow_id, ui_consent.DECISION_APPROVE, store=store)
+
+    assert response.status_code == 400
+    assert strings.ERROR_EXPIRED_TITLE in response.text
+    assert revoke.call_count == 0, "the credential of the granted connection stays valid"
+    assert len(rows(store, "auth_codes")) == 1, "the code of the approval survives"
+    assert len(rows(store, "authorizations")) == 1, "and so does what it points at"
+
+
+def test_an_approval_after_a_pause_of_the_same_flow_grants_nothing(store: OAuthStore) -> None:
+    """The other order, and the control that the claim left the paused path itself alone."""
+    provider = make(store)
+    register(provider)
+    client, flow_id, _page = signed_in(provider)
+    paused(store)
+
+    with respx.mock:
+        revoke = respx.delete(REVOKE_URL).mock(return_value=httpx.Response(200, json={}))
+        first = decide(client, flow_id, ui_consent.DECISION_APPROVE, store=store)
+    second = decide(client, flow_id, ui_consent.DECISION_APPROVE, store=store)
+
+    assert first.status_code == 403
+    assert strings.CONNECTIONS_PAUSED_TITLE in first.text
+    assert second.status_code == 400
+    assert "location" not in second.headers
+    assert revoke.call_count == 1, "one attempt, and the app password goes back"
+    assert rows(store, "auth_codes") == []
+    assert rows(store, "authorizations") == []
+
+
 # --- WR-06: a ciphertext that cannot be read is a page, never a 500 -----------------------
 
 

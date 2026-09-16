@@ -602,6 +602,12 @@ async def _decide(
         # is the page that names the setting and the way back to it, and the client learns
         # only that no code arrived.
         logger.info("a decision was refused because the account has paused its MCP access")
+        if not await store.redeem_flow(row.flow_id):
+            # The claim of BL-19 on this path too (BL-20): a withdrawal that arrives while an
+            # approval of the same flow is underway must not take back what the other one just
+            # granted, so it is the second press of the button like any other late decision.
+            logger.info("a paused refusal arrived for a flow another decision had already spent")
+            return _page(errors.error_page("E3", env=env))
         await _withdraw(store, row, authorization.nc_user, env)
         return _page(errors.error_page(errors.PAUSED, env=env))
 
