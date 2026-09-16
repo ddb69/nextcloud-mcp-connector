@@ -730,6 +730,19 @@ zweite Identitaetsquelle die Angriffsflaeche des Race vergroessert.
 
 ## BL-20: Paused-Zweig in _decide claimt den Flow nicht (Nachlaeufer zu BL-19)
 
+**STATUS 2026-09-16: DONE** (commit 494f36a): Der Paused-Zweig ruft `store.redeem_flow`
+vor `_withdraw`, dasselbe Compare-and-Set, das `_deny` seit BL-19 nutzt. Der Verlierer
+bekommt die Seite, die ein verbrauchter Flow immer bekam (E3, 400), kein neuer Fehlertyp
+und kein 500; die gewinnende Pause antwortet unveraendert mit der Paused-Seite (403) und
+gibt das App-Passwort zurueck. Tests im BL-19-Abschnitt: Pause gegen Zustimmung ueber zwei
+Threads an derselben Barriere, wobei genau einer der beiden den Schalter umgelegt sieht,
+dazu der deterministische Verlierer (Pause verliert den Flow, Code und Authorization der
+Zustimmung ueberleben, keine Widerrufung) und die Gegenrichtung (Zustimmung nach Pause
+gewaehrt nichts). Gegenprobe: beide Rennen-Tests fallen mit der alten Schreibweise
+(`[200, 403]` statt `[200, 400]`, also Code UND Widerruf), mit dem Fix ueber fuenf
+Wiederholungen stabil gruen. Sechs Zeilen in consent.py, keine Loeschung, keine API-
+oder Schemaaenderung.
+
 **Found:** 2026-09-16, beim Review von PR #6 gegen den frischen BL-19-Fix.
 Der Paused-Zweig (_withdraw bei consent.py ~605) loescht den Flow ohne
 redeem_flow-Claim: ein Paused-Withdraw parallel zu einem Approve kann einen
@@ -742,4 +755,4 @@ plus Paralleltest Paused-vs-Approve nach dem Barrier-Muster der
 BL-19-Tests. Zeitlich unkritisch; VOR dem Merge von PR #6 erledigen,
 damit DaniW42 nur einmal rebased.
 
-**Status:** OPEN
+**Status:** DONE

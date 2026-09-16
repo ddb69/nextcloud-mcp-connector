@@ -25,6 +25,14 @@ Nothing here is released.
   same race no longer takes back a connection the approval had just granted. Nothing about
   this changes what a client sends or receives, and no code that was ever handed out could
   reach further than the single connection it belonged to.
+- A connection that was paused while its consent screen stood open followed the same rule.
+  Pausing MCP access refuses a decision that arrives afterwards and hands the app password of
+  that sign in back, and that refusal made its claim on the pending connection the way the two
+  buttons already did. Before, a pause that arrived while an approval of the same connection
+  was underway could take back what the approval had just granted, leaving an authorization
+  code behind that pointed at nothing. Such a code was refused when it was exchanged, so
+  nothing was ever granted that should not have been, and the paused refusal itself is
+  unchanged: the app password goes back, the connection ends, and the page names the setting.
 
 ## [0.1.13] - 2026-09-11
 
