@@ -62,6 +62,7 @@ from typing import Any
 
 import httpx
 import pytest
+from topology import CONTAINERS
 
 from mcp_connector.config import normalize_base_url
 from mcp_connector.nextcloud import NcClients, capabilities
@@ -79,15 +80,6 @@ pytestmark = [pytest.mark.integration, pytest.mark.anyio]
 #: test process has no business requiring. The same reasoning as in
 #: ``test_srv06_degradation.py``, and the list is here because the measurement document names
 #: the topology it belongs to.
-CONTAINERS = (
-    "nc-mcp-exapp-nc",
-    "nc_app_mcp_connector",
-    "nc-mcp-exapp-harp",
-    "nc-mcp-exapp-caddy",
-    "nc-mcp-exapp-registry",
-    "nc-mcp-exapp-greenmail",
-)
-
 #: The query every bundle of this file is asked with. Chosen and not arbitrary, for two
 #: reasons that pull in opposite directions: it has to reach files, notes and cards so
 #: ``detail="full"`` really produces the three excerpts the reference measurement of plan

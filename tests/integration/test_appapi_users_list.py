@@ -45,6 +45,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from topology import COMPOSE
 
 from mcp_connector import config
 from mcp_connector.audit import accounts
@@ -53,12 +54,8 @@ from mcp_connector.nextcloud.credentials import appapi_auth_headers
 
 pytestmark = [pytest.mark.integration, pytest.mark.anyio]
 
-#: The repository root, from which ``compose.exapp.yml`` is reachable.
+#: The repository root, from which the compose file of the topology is reachable.
 REPO_ROOT = Path(__file__).resolve().parents[2]
-
-#: How the CI job talks to the instance: the same command line, without a project name, so
-#: the default project of the repository directory is the one that is met.
-COMPOSE = ("docker", "compose", "-f", "compose.exapp.yml")
 
 #: The password of the throwaway account of case four. It never leaves the topology, and the
 #: account it belongs to exists for a few seconds inside a container that is thrown away.

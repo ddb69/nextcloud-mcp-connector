@@ -54,15 +54,12 @@ from typing import Any
 
 import httpx
 import pytest
+from topology import EXAPP_CONTAINER
 
 pytestmark = [pytest.mark.integration, pytest.mark.anyio]
 
 #: The app id is frozen (docs/app-id-freeze.md), so the HaRP route is a constant here.
 EXAPP_MCP_PATH = "/exapps/mcp_connector/mcp"
-
-#: The container the deploy daemon started. It is restarted by one check, which is the
-#: point of that check: a connection has to survive it.
-EXAPP_CONTAINER = "nc_app_mcp_connector"
 
 #: How long a restarted container may take to answer again before the check gives up.
 RESTART_TIMEOUT = 60.0

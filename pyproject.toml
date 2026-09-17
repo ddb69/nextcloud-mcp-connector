@@ -1,6 +1,6 @@
 [project]
 name = "nextcloud-mcp-connector"
-version = "0.1.13"
+version = "0.1.14"
 description = "Curated MCP server for Nextcloud: files, calendar, notes, deck and contacts as read-first tools"
 requires-python = ">=3.13"
 license = "AGPL-3.0-or-later"
@@ -46,6 +46,11 @@ markers = [
     "integration: needs the Docker test Nextcloud (opt-in via -m integration)",
     "matrix: starts local subprocesses without Nextcloud (opt-in via -m matrix)",
 ]
+# The integration directory carries one module that is not a test file,
+# `topology.py`, and the importlib mode above does not put a test's own directory on
+# the import path. This entry does, and only for that directory: the files there import
+# `topology` and nothing else of each other.
+pythonpath = ["tests/integration"]
 
 [tool.ruff]
 line-length = 100

@@ -57,6 +57,7 @@ from typing import Any
 
 import httpx
 import pytest
+from topology import COMPOSE_HINT, NC_CONTAINER
 
 from mcp_connector.config import normalize_base_url
 from mcp_connector.errors import ToolError
@@ -69,16 +70,6 @@ from mcp_connector.tools import tables as tables_tools
 from mcp_connector.tools import talk as talk_tools
 
 pytestmark = [pytest.mark.integration, pytest.mark.anyio]
-
-#: The Nextcloud container of ``compose.exapp.yml``. Named rather than resolved through
-#: compose, because every compose call against that file needs ``HP_SHARED_KEY`` in the
-#: environment, which a test process has no business requiring.
-NC_CONTAINER = "nc-mcp-exapp-nc"
-
-#: The compose spelling of the same call, for the reader who reproduces it by hand.
-COMPOSE_HINT = (
-    "docker compose -p nc-mcp-exapp -f compose.exapp.yml exec -T --user www-data nextcloud php occ"
-)
 
 #: How long a restarted Nextcloud may take to answer ``occ status`` with ``installed: true``.
 #: Generous on purpose: a timeout here would leave the instance in the disabled state, which

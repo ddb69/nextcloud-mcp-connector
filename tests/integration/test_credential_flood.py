@@ -60,6 +60,13 @@ from dataclasses import dataclass, field
 
 import httpx
 import pytest
+from topology import (
+    CADDY_CONTAINER,
+    COMPOSE_HINT,
+    EXAPP_CONTAINER,
+    HARP_CONTAINER,
+    NC_CONTAINER,
+)
 
 pytestmark = [pytest.mark.integration]
 
@@ -79,16 +86,6 @@ FLOOD_SIZE = 200
 # well above what any real client opens and low enough that no request of the run is refused
 # by our own operating system.
 CONCURRENCY = 20
-
-# The names compose.exapp.yml pins for its services. Both are needed, because the reader
-# reproduces with compose while this process talks to the daemon directly (see module head).
-NC_CONTAINER = "nc-mcp-exapp-nc"
-HARP_CONTAINER = "nc-mcp-exapp-harp"
-EXAPP_CONTAINER = "nc_app_mcp_connector"
-CADDY_CONTAINER = "nc-mcp-exapp-caddy"
-COMPOSE_HINT = (
-    "docker compose -p nc-mcp-exapp -f compose.exapp.yml exec -T --user www-data nextcloud php occ"
-)
 
 # The health check of the nextcloud service hits this path every five seconds. It is traffic
 # of the fixture, not of the flood, so it is subtracted from every count.
