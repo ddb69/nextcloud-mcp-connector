@@ -13,6 +13,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Nothing here is released.
 
+## [0.1.15] - 2026-09-17
+
+A text correction, and the reason it is its own release: the store reads the manifest
+at upload time, so the description of 0.1.14 still named the old version range.
+
+### Fixed
+
+- The requirements of the app description said "Nextcloud 32 to 34" while the app
+  already installs on 35. On the store page that contradicted the release table right
+  above it, which listed 0.1.14 for Nextcloud 35. All three language descriptions and
+  the installation paragraph of all three readme files now say 32 to 35. Nothing about
+  the app itself changes with this release; 0.1.14 installs and runs on Nextcloud 35
+  exactly as this one does.
+
 ## [0.1.14] - 2026-09-17
 
 Nextcloud 35 refused to install this app, and that is what this release is for.
@@ -667,6 +681,7 @@ First release, submitted to the Nextcloud App Store.
   never sees more than that user sees in the web interface.
 - A privacy and data flow description, see [docs/privacy.md](docs/privacy.md).
 
+[0.1.15]: https://github.com/street1983nk/nextcloud-mcp-connector/compare/v0.1.14...v0.1.15
 [0.1.14]: https://github.com/street1983nk/nextcloud-mcp-connector/compare/v0.1.13...v0.1.14
 [0.1.13]: https://github.com/street1983nk/nextcloud-mcp-connector/compare/v0.1.12...v0.1.13
 [0.1.12]: https://github.com/street1983nk/nextcloud-mcp-connector/compare/v0.1.11...v0.1.12
