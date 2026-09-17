@@ -1,8 +1,8 @@
 # Evidence for the Nextcloud 35 version window
 
-**Date:** 2026-09-16
+**Date:** 2026-09-16, end-to-end run added 2026-09-17
 **Subject:** why `appinfo/info.xml` declares `max-version="35"` since this date
-**Status:** four of five checks done against a running instance, one named as open
+**Status:** all five checks done against a running 35.0.0 instance
 
 Nextcloud 35 ("Hub 26 Summer") was released on 2026-09-15. Until the window was raised,
 this app declared `max-version="34"` and Nextcloud 35 refused to install it. That refusal
@@ -74,24 +74,78 @@ instance rather than out of a changelog:
 | route `/ocs/v2.php/apps/app_api/ex-app/status` | `src/mcp_connector/exapp/status.py` | yes, `appinfo/routes.php` |
 | route `/ocs/v2.php/apps/app_api/api/v1/ex-app/config` | `src/mcp_connector/oauth/crypto.py` | yes, same file |
 
-## What is still open, and why it does not block the window
+## Check 5: the end-to-end run through HaRP
 
-The end-to-end run is not part of this evidence: registering the app through a HaRP deploy
-daemon on a 35 instance and calling one tool through it. That needs the full topology from
-`compose.exapp.yml`, and the one on this machine is occupied.
+Done on 2026-09-17, the day after the four checks above. This was the open half: it needs
+the full topology, and the machine had only one, occupied. `compose.nc35.yml` is the second
+one, and `scripts/bootstrap_exapp.sh --nc35` installs this app into it the way AppAPI
+installs it anywhere, through the HaRP deploy daemon.
 
-The window was still raised, for three reasons. The refusal in check 2 is a hard block that
-affects real installations today, while a possible HaRP defect would be a fixable bug on an
-otherwise reachable app. The app has no PHP, so the usual source of server-upgrade breakage
-does not apply to it. And the five coupling points in check 4 are the whole interface
-between this app and the server, verified as present.
+```
+$ export HP_SHARED_KEY="$(openssl rand -hex 32)"
+$ docker compose -f compose.nc35.yml up -d --wait
+$ bash scripts/bootstrap_exapp.sh --nc35
+...
+exapp mcp_connector: registered and deployed
+exapp mcp_connector: enabled
+mcp_connector (MCP Connector): 0.1.13 [enabled]
+```
 
-Two consequences follow, and they are deliberate:
+What then answered, over the whole chain (client, Caddy, HaRP, ExApp container, Nextcloud):
 
-- **The store release is a separate decision.** Raising the window in the repository is
-  reversible; moving a tag in the store is not. The end-to-end run belongs before a release,
-  not before a commit.
-- **`compose.exapp.yml` and `compose.staging.yml` still pin a 34 image.** They stay that way
-  until an official 35 image is published, because a topology that points at a locally built
-  image is not reproducible for anyone else. Raising them is the first step of the
-  end-to-end run.
+| What was run | Result |
+|---|---|
+| `scripts/oauth_flow_check.py` | all seven steps, including the refusals: a decision without an independent identity is a 400, the credential of a connect page is shown once and the second read is a 400, and eleven token attempts end in a 429 with `Retry-After: 300` |
+| `scripts/oauth_flow_check.py --measure` | success criteria 3 and 5 |
+| `scripts/acceptance_all_tools.py` | all 21 tools of the registry answered |
+| `pytest tests/integration -m integration` | 160 cases, one skip, one failure that is red on Nextcloud 34 in the same way (see below) |
+
+The single failure is `test_contacts_search.py::test_an_account_without_an_addressbook_gets_the_occ_hint`.
+Its premise no longer holds on either version: `occ dav:list-addressbooks bob` reports a
+default addressbook on the 34 instance and on the 35 one, because Nextcloud creates one on
+first access. Stale test data, not a version difference, and it is not fixed here so that
+this document does not claim a green run it did not have.
+
+## Three defects this run found, all in the proof and none in the app
+
+They are written down because each of them produced a wrong answer that looked like a right
+one, which is the only kind worth recording.
+
+1. **Four integration files addressed one topology by name.** `NC_CONTAINER`,
+   `EXAPP_CONTAINER` and the compose file were constants pointing at the 34 topology. Run
+   against the 35 instance, those cases created accounts, stopped apps and counted
+   bruteforce entries in the 34 instance while asserting against the 35 one. Nothing failed
+   loudly: `test_a_deleted_account_is_gone_from_the_list` simply reported a product defect
+   that did not exist. The names now live in `tests/integration/topology.py` and are read
+   from the environment, with the 34 values as the defaults.
+2. **The first Nextcloud 35 bootstrap was a copy of `bootstrap_exapp.sh`** with two
+   constants changed. The three it did not change, the loopback port, the HaRP container and
+   the compose network, produced exactly the same crossing: every HTTP step went to the 34
+   instance, every `occ` step to the 35 one, the daemon was registered with the shared key of
+   the wrong HaRP, and the deployed container was attached to the wrong network, where
+   `NEXTCLOUD_URL=http://caddy` resolved to the wrong server. The copy is gone; `--nc35` is a
+   flag of the one script, next to `--staging`.
+3. **The instance came up without the pretty URL rewrite.** Because Nextcloud 35 was laid
+   over a 34 image, `.htaccess` and `htaccess.RewriteBase` were the ones of the older tree:
+   `POST /login` answered 200 with the login page while `POST /index.php/login` answered 303.
+   Every headless sign in of the proof failed, which reads like a changed login API and is a
+   stale rewrite. `occ config:system:set htaccess.RewriteBase --value=/` followed by
+   `occ maintenance:update:htaccess` fixes it, and a topology built from an official image
+   never has it.
+
+## One change in Nextcloud 35 that operators should know about
+
+`OC\Core\Controller\LoginController::tryLogin` checks the `Origin` header against the
+trusted domains since this release; Nextcloud 34 has no such check. An instance reached under
+a host **and a port** therefore needs that port in `trusted_domains`, or its login form
+refuses every sign in with an invalid origin. This app is not affected, it never posts that
+form, but Login Flow v2 runs in the browser of the person connecting, so their sign in is.
+
+## What stays as it was
+
+- **The store release remains its own decision**, taken after this run and not before it.
+- **`compose.exapp.yml` and `compose.staging.yml` still pin a 34 image.** Docker Hub carries
+  Nextcloud 35 tags since 2026-09-16, but they resolve to nothing: `docker pull
+  nextcloud:35.0.0-apache` answers `no matching manifest for linux/amd64` and the tag's
+  image list on the registry API is empty. `compose.nc35.yml` therefore still names the
+  locally built image. Point all three at the official tag on the day it resolves.
