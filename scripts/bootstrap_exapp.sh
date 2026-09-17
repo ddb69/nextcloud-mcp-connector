@@ -34,6 +34,19 @@
 # scripts/setup_staging.sh is the only intended caller; docs/staging-setup.md is the
 # runbook around it.
 #
+# The Nextcloud 35 evidence instance of docs/nc35-evidence.md:
+#
+#   export HP_SHARED_KEY="$(openssl rand -hex 32)"
+#   docker compose -f compose.nc35.yml up -d --wait
+#   bash scripts/bootstrap_exapp.sh --nc35
+#
+# does the same work against compose.nc35.yml on port 8082, so the 34 topology keeps
+# running untouched next to it. It is a flag for the same reason --staging is one: the
+# first version of this was a copy of this file with two constants changed, and the three
+# it did not change (the port, the HaRP container and the network) made it create accounts
+# in the 34 instance while asserting against the 35 one, which looked like a product defect
+# for an hour.
+#
 # This script only ever talks to one of the two throwaway topologies named above. It never
 # stops a container of the test topology in this repository and never destroys a volume,
 # which is why neither that file name nor a "down" command appears anywhere below.
@@ -48,16 +61,27 @@ export MSYS_NO_PATHCONV=1
 
 MANUAL_MODE=0
 STAGING_MODE=0
+NC35_MODE=0
 for argument in "$@"; do
   case "${argument}" in
     --manual) MANUAL_MODE=1 ;;
     --staging) STAGING_MODE=1 ;;
+    --nc35) NC35_MODE=1 ;;
     *)
-      echo "ERROR: unknown argument '${argument}'. Known flags: --manual, --staging." >&2
+      echo "ERROR: unknown argument '${argument}'. Known flags: --manual, --staging, --nc35." >&2
       exit 1
       ;;
   esac
 done
+if [ $((STAGING_MODE + NC35_MODE)) -gt 1 ]; then
+  echo "ERROR: --staging and --nc35 are two different topologies. Pick one." >&2
+  exit 1
+fi
+if [ "${MANUAL_MODE}" -eq 1 ] && [ "${NC35_MODE}" -eq 1 ]; then
+  echo "ERROR: --manual serves the app from this host, and the Nextcloud 35 evidence has" >&2
+  echo "to run the container image AppAPI deploys. Drop --manual." >&2
+  exit 1
+fi
 if [ "${MANUAL_MODE}" -eq 1 ] && [ "${STAGING_MODE}" -eq 1 ]; then
   echo "ERROR: --manual is the local development loop and --staging is the public" >&2
   echo "instance. Combining them would register a local process as the public ExApp." >&2
@@ -123,6 +147,21 @@ COMPOSE_ENV_ARGS=()
 # Disabling the bruteforce guard is a property of an unreachable instance, never of a
 # public one. The staging branch below turns this off.
 DISABLE_BRUTEFORCE=1
+
+if [ "${NC35_MODE}" -eq 1 ]; then
+  # The Nextcloud 35 evidence instance. Same script, same steps, five differences, and all
+  # five have to move together: another compose file, another project, another HaRP
+  # container, another network and another port. Leaving any one of them on the 34 value
+  # points half of this script at the other instance, which is exactly what the first,
+  # copied version of this branch did.
+  COMPOSE_FILE="compose.nc35.yml"
+  PROJECT_NAME="nc-mcp-nc35"
+  HARP_CONTAINER="nc35-harp"
+  NETWORK_NAME="nc-mcp-nc35-net"
+  ENV_FILE="${ENV_FILE_NC35:-.env.nc35}"
+  HOST_PORT="${NC_NC35_PORT:-8082}"
+  BASE_URL="http://127.0.0.1:${HOST_PORT}"
+fi
 
 if [ "${STAGING_MODE}" -eq 1 ]; then
   # The public instance of plan 03-09. Same script, same steps, four differences: another

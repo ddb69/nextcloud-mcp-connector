@@ -1,0 +1,106 @@
+# The second HaRP topology: the Nextcloud 35 instance the version window of
+# appinfo/info.xml was measured against (docs/nc35-evidence.md).
+#
+#   export HP_SHARED_KEY="$(openssl rand -hex 32)"
+#   docker compose -f compose.nc35.yml up -d --wait
+#   bash scripts/bootstrap_exapp.sh --nc35
+#   docker compose -f compose.nc35.yml down -v
+#
+# It is a copy of compose.exapp.yml with four differences and nothing else:
+#
+#   1. The Nextcloud image is a 35.0.0, not a 34. Docker Hub carried no pullable
+#      35 image when this was written: the tags exist since 2026-09-16, but
+#      `docker pull nextcloud:35.0.0-apache` answers "no matching manifest for
+#      linux/amd64". The instance is therefore built from the released source
+#      package over the official 34-apache image, which the evidence document
+#      records with its checksum. Point this at the official tag the day it
+#      resolves; nothing else here changes with it.
+#   2. Its own project name and its own container names, so the 34 topology next
+#      to it keeps running untouched. Both exist at the same time on purpose:
+#      a version claim about 35 is only worth something if 34 is still there to
+#      compare against.
+#   3. Its own subnet and its own loopback port, for the same reason.
+#   4. No registry service. The image of this app is built and pushed by the
+#      bootstrap into the registry the 34 topology publishes on the host, and the
+#      deploy daemon pulls it through the host's Docker, so a second registry
+#      would be a second copy of the same thing.
+#
+# The throwaway credentials of compose.exapp.yml apply here word for word: this
+# instance listens on loopback only and its bruteforce guard is switched off.
+name: nc-mcp-nc35
+
+services:
+  caddy:
+    image: caddy:2
+    container_name: nc35-caddy
+    ports:
+      - "127.0.0.1:8082:80"
+    volumes:
+      - C:\Users\Student\nextcloud-mcp-connector\deploy\Caddyfile:/etc/caddy/Caddyfile:ro
+    networks:
+      default:
+        ipv4_address: 172.30.42.10
+    depends_on:
+      nextcloud:
+        condition: service_healthy
+    restart: unless-stopped
+
+  nextcloud:
+    image: nextcloud:35.0.0-apache-local
+    container_name: nc35-nc
+    environment:
+      SQLITE_DATABASE: nextcloud
+      NEXTCLOUD_ADMIN_USER: admin
+      NEXTCLOUD_ADMIN_PASSWORD: nc35-beweis-admin-pw
+      NEXTCLOUD_TRUSTED_DOMAINS: "localhost 127.0.0.1 caddy"
+      OVERWRITEHOST: "127.0.0.1:8082"
+      OVERWRITEPROTOCOL: http
+      OVERWRITECLIURL: "http://127.0.0.1:8082"
+      TRUSTED_PROXIES: "172.30.42.10"
+    healthcheck:
+      test: ["CMD", "php", "-r", "exit(file_get_contents('http://localhost/status.php') ? 0 : 1);"]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+    volumes:
+      - nextcloud-nc35-data:/var/www/html
+    restart: unless-stopped
+
+  appapi-harp:
+    image: ghcr.io/nextcloud/nextcloud-appapi-harp:release
+    container_name: nc35-harp
+    environment:
+      HP_SHARED_KEY: "${HP_SHARED_KEY:?export HP_SHARED_KEY with 64 hex characters first}"
+      NC_INSTANCE_URL: "http://caddy"
+      HP_TRUSTED_PROXY_IPS: "172.30.42.10"
+      HP_LOG_LEVEL: "info"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - nc35-harp-certs:/certs
+    depends_on:
+      nextcloud:
+        condition: service_healthy
+    restart: unless-stopped
+
+  greenmail:
+    image: greenmail/standalone:2.1.12
+    container_name: nc35-greenmail
+    environment:
+      GREENMAIL_OPTS: >-
+        -Dgreenmail.setup.test.all
+        -Dgreenmail.hostname=0.0.0.0
+        -Dgreenmail.auth.disabled
+        -Dgreenmail.users=alice:alice-spike-imap-pw@example.test
+    restart: unless-stopped
+
+networks:
+  default:
+    name: nc-mcp-nc35-net
+    ipam:
+      config:
+        - subnet: 172.30.42.0/24
+          ip_range: 172.30.42.128/25
+
+volumes:
+  nextcloud-nc35-data:
+  nc35-harp-certs:

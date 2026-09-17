@@ -4,6 +4,7 @@ __pycache__/
 .env
 .env.test
 .env.exapp
+.env.nc35
 # The two secret files of the public staging instance (plan 03-09). .env.staging carries
 # the HaRP shared key, the administrator password and the account passwords of the
 # throwaway users; .env.staging.app carries the registration secret and two working app
