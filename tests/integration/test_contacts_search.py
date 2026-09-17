@@ -23,7 +23,6 @@ import httpx
 import pytest
 
 from mcp_connector.config import normalize_base_url
-from mcp_connector.errors import ToolError
 from mcp_connector.nextcloud import NcClients
 from mcp_connector.nextcloud.clients import carddav
 from mcp_connector.nextcloud.credentials import Credentials
@@ -53,10 +52,12 @@ def clients(live_env: dict[str, str | None]) -> NcClients:
 
 @pytest.fixture
 def clients_without_addressbook(live_env: dict[str, str | None]) -> NcClients:
-    """bob: created by ``occ user:add``, so the bootstrap gives him no address book.
+    """bob: created by ``occ user:add``, so no address book of his own was ever made for him.
 
     He does own the two generated collections, because they appear as soon as an account
-    authenticates once. They are not his address books, and the tool says so.
+    authenticates once, and since the first CardDAV request he also owns the default
+    ``contacts`` book Nextcloud creates on that request. See the case below for what that
+    means and how it was measured.
     """
     base_url = live_env["base_url"]
     user = os.environ.get("NC_MCP_TEST_USER2")
@@ -128,11 +129,27 @@ async def test_a_term_without_a_hit_returns_an_empty_list(clients: NcClients) ->
     assert "degraded" not in result
 
 
-async def test_an_account_without_an_addressbook_gets_the_occ_hint(
+async def test_an_account_without_an_addressbook_is_given_one_and_searches_empty(
     clients_without_addressbook: NcClients,
 ) -> None:
-    with pytest.raises(ToolError) as excinfo:
-        await contacts_tools.search(clients_without_addressbook, "meier")
+    """The measured truth, which is not what this case asserted until 2026-09-17.
 
-    assert "no address book" in excinfo.value.message.lower()
-    assert "dav:create-addressbook" in excinfo.value.hint
+    It used to expect the "this account has no address book" refusal and its ``occ`` hint.
+    That refusal cannot be reached through the tool any more, and the case proved it by
+    going green once and red on every later run: the discovery request the search makes is
+    itself a CardDAV request, and Nextcloud creates the default ``contacts`` book on the
+    first one. Measured on 2026-09-17 with an account that had never been touched, on
+    Nextcloud 34.0.3 and on 35.0.0 alike: ``occ dav:list-addressbooks`` says "has no
+    addressbooks" before the call and lists ``contacts`` after it, and the search returns an
+    empty list rather than raising.
+
+    The refusal itself stays in ``carddav.py``. A server that does not create that book, an
+    older one or one with the feature switched off, still reaches it, and it keeps its three
+    unit cases (``test_carddav_client.py`` twice, ``test_contacts_tools.py`` once), where the
+    empty discovery can be provoked instead of waited for.
+    """
+    result = await contacts_tools.search(clients_without_addressbook, "meier")
+
+    assert result["contacts"] == []
+    assert result["count"] == 0
+    assert result["query"] == "meier"

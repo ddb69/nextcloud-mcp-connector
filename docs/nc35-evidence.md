@@ -98,13 +98,26 @@ What then answered, over the whole chain (client, Caddy, HaRP, ExApp container, 
 | `scripts/oauth_flow_check.py` | all seven steps, including the refusals: a decision without an independent identity is a 400, the credential of a connect page is shown once and the second read is a 400, and eleven token attempts end in a 429 with `Retry-After: 300` |
 | `scripts/oauth_flow_check.py --measure` | success criteria 3 and 5 |
 | `scripts/acceptance_all_tools.py` | all 21 tools of the registry answered |
-| `pytest tests/integration -m integration` | 160 cases, one skip, one failure that is red on Nextcloud 34 in the same way (see below) |
+| `pytest tests/integration -m integration` | 160 cases, one skip, no failure |
 
-The single failure is `test_contacts_search.py::test_an_account_without_an_addressbook_gets_the_occ_hint`.
-Its premise no longer holds on either version: `occ dav:list-addressbooks bob` reports a
-default addressbook on the 34 instance and on the 35 one, because Nextcloud creates one on
-first access. Stale test data, not a version difference, and it is not fixed here so that
-this document does not claim a green run it did not have.
+The suite needs two runs and not one, which is a property of the app and not of this
+instance: `test_http_tool_call.py` starts a standalone HTTP server, and that entry point
+refuses to start while `APP_ID` and `APP_SECRET` are set, because those two select the ExApp
+credential mode and the server would then wait for a header it never gets. So the ExApp
+cases run with the deploy environment and that one file runs without it. Both runs are green.
+
+One case was repaired during this run rather than measured as red, and the repair is a
+finding of its own: `test_an_account_without_an_addressbook_gets_the_occ_hint` expected the
+"this account has no address book" refusal, and that refusal cannot be reached through the
+tool any more. The discovery request the search makes is itself a CardDAV request, and
+Nextcloud creates the default `contacts` book on the first one. Measured with an account
+that had never been touched: `occ dav:list-addressbooks` says "has no addressbooks" before
+the call and lists `contacts` after it, and the search returns an empty list instead of
+raising. On Nextcloud 34.0.3 exactly as on 35.0.0, so this is not a version difference; the
+case had been going green once per fresh instance and red on every later run ever since.
+It now measures what happens, the refusal stays in `carddav.py` for a server that behaves
+differently, and its three unit cases keep covering it where an empty discovery can be
+provoked.
 
 ## Three defects this run found, all in the proof and none in the app
 
