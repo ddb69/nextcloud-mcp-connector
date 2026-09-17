@@ -13,6 +13,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Nothing here is released.
 
+## [0.1.14] - 2026-09-17
+
+Nextcloud 35 refused to install this app, and that is what this release is for.
+
 ### Added
 
 - The app installs on Nextcloud 35 ("Hub 26 Summer", released 2026-09-15). The declared
@@ -21,8 +25,10 @@ Nothing here is released.
   The window now ends at 35. It was raised against a running 35.0.0 instance rather than
   against the release notes: the manifest is refused at 34 and accepted at 35, AppAPI 35.0.0
   ships and enables, and the three headers and two OCS routes this app depends on exist
-  unchanged. `docs/nc35-evidence.md` records what was run, and names the end-to-end run
-  through HaRP as the half that is still open.
+  unchanged. The end-to-end run through HaRP followed on 2026-09-17: the app registers,
+  enables and answers over the whole chain on a 35.0.0 instance, the OAuth flow check
+  passes with its refusal cases, all 21 tools answer, and the integration suite runs
+  against that instance. `docs/nc35-evidence.md` records every command.
 
 ### Fixed
 
@@ -661,6 +667,7 @@ First release, submitted to the Nextcloud App Store.
   never sees more than that user sees in the web interface.
 - A privacy and data flow description, see [docs/privacy.md](docs/privacy.md).
 
+[0.1.14]: https://github.com/street1983nk/nextcloud-mcp-connector/compare/v0.1.13...v0.1.14
 [0.1.13]: https://github.com/street1983nk/nextcloud-mcp-connector/compare/v0.1.12...v0.1.13
 [0.1.12]: https://github.com/street1983nk/nextcloud-mcp-connector/compare/v0.1.11...v0.1.12
 [0.1.11]: https://github.com/street1983nk/nextcloud-mcp-connector/compare/v0.1.10...v0.1.11
