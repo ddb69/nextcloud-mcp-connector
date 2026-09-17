@@ -76,7 +76,7 @@ The hash-chained audit log is built in and off by default; next on this road: gr
 
 Requirements:
 
-- Nextcloud 32 to 34 with the AppAPI app; runs as an External App
+- Nextcloud 32 to 35 with the AppAPI app; runs as an External App
 - n8n speaks MCP natively since 1.119.0; guide: docs/n8n-setup.md in the source code]]></description>
 	<description lang="de"><![CDATA[Was der MCP Connector kann:
 
@@ -92,7 +92,7 @@ Das hash-verkettete Audit-Log ist eingebaut und ab Werk aus; als Nächstes auf d
 
 Anforderungen:
 
-- Nextcloud 32 bis 34 mit der App AppAPI; läuft als External App
+- Nextcloud 32 bis 35 mit der App AppAPI; läuft als External App
 - n8n spricht MCP ab 1.119.0 direkt; Anleitung: docs/n8n-setup.md im Quellcode]]></description>
 	<description lang="fr"><![CDATA[Ce que sait faire le MCP Connector :
 
@@ -108,7 +108,7 @@ Le journal d'audit chaîné par hachage est intégré et désactivé par défaut
 
 Prérequis :
 
-- Nextcloud 32 à 34 avec l'application AppAPI ; fonctionne comme External App
+- Nextcloud 32 à 35 avec l'application AppAPI ; fonctionne comme External App
 - n8n parle MCP nativement depuis la 1.119.0 ; guide : docs/n8n-setup.md dans le code source]]></description>
 	<version>0.1.14</version>
 	<licence>agpl</licence>

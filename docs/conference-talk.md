@@ -135,10 +135,10 @@ find me afterwards and I will run it on my laptop.
 ## Slide 8, take it
 
 - `github.com/street1983nk/nextcloud-mcp-connector`, AGPL-3.0
-- In the store as `mcp_connector`, min Nextcloud 32, max 34
+- In the store as `mcp_connector`, min Nextcloud 32, max 35
 - Issues, review and a maintainer with an opinion are all welcome
 
-**Speaker note (25 s).** That is it. It is AGPL, it is in the store, it works on 32 to 34. If
+**Speaker note (25 s).** That is it. It is AGPL, it is in the store, it works on 32 to 35. If
 you run a Nextcloud for other people, the page in slide five is the part I would like you to
 look at, because I built it from a guess about what users want and I would rather have your
 opinion than my guess. And if anybody from the server or AppAPI side wants to tell me that I

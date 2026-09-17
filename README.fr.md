@@ -123,7 +123,7 @@ Administration, Sécurité :
 Référencée dans l'App Store de Nextcloud sous le nom
 [MCP Connector](https://apps.nextcloud.com/apps/mcp_connector) et installée comme ExApp :
 activer AppAPI, enregistrer un deploy daemon, puis déployer et activer l'application.
-Nextcloud 32 à 34. Sur 34.0.3 l'interface de gestion des applications s'en charge, sur les
+Nextcloud 32 à 35. Sur 34.0.3 l'interface de gestion des applications s'en charge, sur les
 versions antérieures occ est le chemin fiable. Le déroulé complet avec les commandes exactes
 et les pièges qui surviennent vraiment : [docs/exapp-install.md](docs/exapp-install.md).
 

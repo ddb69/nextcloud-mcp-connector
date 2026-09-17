@@ -118,7 +118,7 @@ Schalter liegen unter Einstellungen, Administration, Sicherheit:
 Im Nextcloud App Store gelistet als
 [MCP Connector](https://apps.nextcloud.com/apps/mcp_connector) und als ExApp installiert:
 AppAPI aktivieren, einen Deploy-Daemon registrieren, dann die App ausrollen und aktivieren.
-Nextcloud 32 bis 34. Auf 34.0.3 erledigt das die Apps-Verwaltung für Sie, auf älteren
+Nextcloud 32 bis 35. Auf 34.0.3 erledigt das die Apps-Verwaltung für Sie, auf älteren
 Versionen ist occ der verlässliche Weg. Der Durchlauf mit den genauen Befehlen und den
 Fallstricken, die wirklich vorkommen: [docs/exapp-install.md](docs/exapp-install.md).
 
