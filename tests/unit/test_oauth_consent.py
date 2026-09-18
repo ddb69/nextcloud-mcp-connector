@@ -34,15 +34,20 @@ import pytest
 import respx
 from mcp.shared.auth import OAuthClientInformationFull
 from starlette.applications import Starlette
+from starlette.requests import Request
 from starlette.testclient import TestClient
 
 from mcp_connector import config
 from mcp_connector.entry_exapp import build_exapp_app
+from mcp_connector.exapp.browser_identity import AppApiBrowserIdentitySource
+from mcp_connector.exapp.target import exapp_target
 from mcp_connector.exapp.ui import consent as ui_consent
 from mcp_connector.exapp.ui import strings
+from mcp_connector.nextcloud.target import NextcloudTarget
 from mcp_connector.oauth import consent, crypto, loginflow, registry
 from mcp_connector.oauth import provider as provider_module
 from mcp_connector.oauth import throttle as throttle_module
+from mcp_connector.oauth.browser_identity import BrowserIdentitySource
 from mcp_connector.oauth.store import AUTH_CODE_TTL, FLOW_TTL, OAuthStore, token_hash
 
 BASE_URL = "http://nc.test"
@@ -92,6 +97,14 @@ def poll_body() -> dict[str, str]:
     return {"server": BASE_URL, "loginName": LOGIN_NAME, "appPassword": APP_PASSWORD}
 
 
+ACCOUNT_URL = f"{BASE_URL}{loginflow.ACCOUNT_PATH}"
+
+
+def account_body(account: str = LOGIN_NAME) -> dict[str, object]:
+    """The answer of OCS ``cloud/user`` for the fresh app password: the canonical id."""
+    return {"ocs": {"meta": {"status": "ok", "statuscode": 200}, "data": {"id": account}}}
+
+
 @pytest.fixture
 def store(tmp_path: Path) -> OAuthStore:
     return OAuthStore(tmp_path / "oauth.sqlite3", KEY)
@@ -102,15 +115,37 @@ def make(store: OAuthStore, **env: str) -> provider_module.NextcloudOAuthProvide
         return store
 
     return provider_module.NextcloudOAuthProvider(
-        env=ENV | env, policy=registry.client_policy(ENV | env), store_provider=provide
+        nextcloud=exapp_target(ENV | env),
+        env=ENV | env,
+        policy=registry.client_policy(ENV | env),
+        store_provider=provide,
     )
 
 
 def application(provider: provider_module.NextcloudOAuthProvider, **env: str) -> Starlette:
+    deployed_env = ENV | env
+    return application_with_identity(
+        provider,
+        AppApiBrowserIdentitySource(deployed_env),
+        **env,
+    )
+
+
+def application_with_identity(
+    provider: provider_module.NextcloudOAuthProvider,
+    browser_identity: BrowserIdentitySource,
+    **env: str,
+) -> Starlette:
+    deployed_env = ENV | env
     return Starlette(
         routes=[
             *provider_module.auth_routes(ENV | env, provider=provider),
-            *consent.consent_routes(ENV | env, provider=provider),
+            *consent.consent_routes(
+                deployed_env,
+                provider=provider,
+                browser_identity=browser_identity,
+                nextcloud=exapp_target(deployed_env),
+            ),
         ]
     )
 
@@ -497,6 +532,7 @@ def test_a_finished_sign_in_turns_into_the_consent_screen(store: OAuthStore) -> 
 
     with respx.mock:
         respx.post(POLL_URL).mock(return_value=httpx.Response(200, json=poll_body()))
+        respx.get(ACCOUNT_URL).mock(return_value=httpx.Response(200, json=account_body()))
         response = client.get(consent_url(flow_id, step=ui_consent.STEP_WAIT))
 
     assert response.status_code == 200
@@ -517,6 +553,7 @@ def test_the_credential_of_the_sign_in_is_stored_and_never_rendered(
 
     with respx.mock:
         respx.post(POLL_URL).mock(return_value=httpx.Response(200, json=poll_body()))
+        respx.get(ACCOUNT_URL).mock(return_value=httpx.Response(200, json=account_body()))
         response = client.get(consent_url(flow_id, step=ui_consent.STEP_WAIT))
 
     assert APP_PASSWORD not in response.text
@@ -540,6 +577,7 @@ def test_a_second_load_after_the_sign_in_does_not_poll_again(store: OAuthStore) 
 
     with respx.mock:
         poll = respx.post(POLL_URL).mock(return_value=httpx.Response(200, json=poll_body()))
+        respx.get(ACCOUNT_URL).mock(return_value=httpx.Response(200, json=account_body()))
         client.get(consent_url(flow_id, step=ui_consent.STEP_WAIT))
         second = client.get(consent_url(flow_id, step=ui_consent.STEP_WAIT))
 
@@ -558,6 +596,7 @@ def test_the_unverified_callout_is_there_for_a_self_registered_client(
 
     with respx.mock:
         respx.post(POLL_URL).mock(return_value=httpx.Response(200, json=poll_body()))
+        respx.get(ACCOUNT_URL).mock(return_value=httpx.Response(200, json=account_body()))
         response = client.get(consent_url(flow_id, step=ui_consent.STEP_WAIT))
 
     assert strings.CONSENT_WARNING_TITLE in response.text
@@ -573,6 +612,7 @@ def test_the_unverified_callout_is_absent_for_a_listed_client(store: OAuthStore)
         respx.post(INIT_URL).mock(return_value=httpx.Response(200, json=start_body()))
         flow_id = flow_of(start(client))
         respx.post(POLL_URL).mock(return_value=httpx.Response(200, json=poll_body()))
+        respx.get(ACCOUNT_URL).mock(return_value=httpx.Response(200, json=account_body()))
         response = client.get(consent_url(flow_id, step=ui_consent.STEP_WAIT))
 
     assert strings.CONSENT_WARNING_TITLE not in response.text
@@ -658,6 +698,7 @@ def fetching(store: OAuthStore, **env: str) -> provider_module.NextcloudOAuthPro
         return store
 
     return provider_module.NextcloudOAuthProvider(
+        nextcloud=exapp_target(ENV | env),
         env=ENV | env,
         policy=registry.client_policy(ENV | env),
         store_provider=provide,
@@ -677,6 +718,7 @@ def signed_in_screen(provider: provider_module.NextcloudOAuthProvider, **overrid
         respx.post(INIT_URL).mock(return_value=httpx.Response(200, json=start_body()))
         flow_id = flow_of(start(client, **overrides))
         respx.post(POLL_URL).mock(return_value=httpx.Response(200, json=poll_body()))
+        respx.get(ACCOUNT_URL).mock(return_value=httpx.Response(200, json=account_body()))
         response = client.get(consent_url(flow_id, step=ui_consent.STEP_WAIT))
     assert response.status_code == 200, response.text
     return response.text
@@ -821,6 +863,7 @@ def test_the_authorize_chain_reads_a_document_again_once_its_window_has_passed(
         respx.post(INIT_URL).mock(return_value=httpx.Response(200, json=start_body()))
         flow_id = flow_of(start(client, client_id=CIMD_CLIENT_ID, redirect_uri=LOOPBACK_REQUESTED))
         respx.post(POLL_URL).mock(return_value=httpx.Response(200, json=poll_body()))
+        respx.get(ACCOUNT_URL).mock(return_value=httpx.Response(200, json=account_body()))
         page = client.get(consent_url(flow_id, step=ui_consent.STEP_WAIT))
 
     assert route.call_count >= 1
@@ -921,6 +964,7 @@ def test_a_client_blocked_after_the_sign_in_does_not_reach_the_decision(
 
     with respx.mock:
         respx.post(POLL_URL).mock(return_value=httpx.Response(200, json=poll_body()))
+        respx.get(ACCOUNT_URL).mock(return_value=httpx.Response(200, json=account_body()))
         response = client.get(consent_url(flow_id, step=ui_consent.STEP_WAIT))
 
     assert response.status_code in (400, 403)
@@ -935,6 +979,7 @@ def signed_in(provider: provider_module.NextcloudOAuthProvider) -> tuple[TestCli
     client, flow_id, _target = opened(provider)
     with respx.mock:
         respx.post(POLL_URL).mock(return_value=httpx.Response(200, json=poll_body()))
+        respx.get(ACCOUNT_URL).mock(return_value=httpx.Response(200, json=account_body()))
         page = client.get(consent_url(flow_id, step=ui_consent.STEP_WAIT))
     return client, flow_id, page.text
 
@@ -985,6 +1030,30 @@ def decide(
         headers=appapi_headers(user) if user is not None else {},
         follow_redirects=False,
     )
+
+
+class StubBrowserIdentitySource:
+    """A deployment-selected authority without AppAPI headers."""
+
+    def __init__(self, answer: bool = True, *, fail: bool = False) -> None:
+        self.answer = answer
+        self.fail = fail
+        self.expected: str | None = None
+        self.path: str | None = None
+
+    async def identifies(
+        self, request: Request, expected_account_id: str, *, flow_id: str | None = None
+    ) -> bool:
+        self.expected = expected_account_id
+        self.path = request.url.path
+        if self.fail:
+            raise RuntimeError("synthetic identity-source failure")
+        return self.answer
+
+    async def pending_step(
+        self, request: Request, *, flow_id: str, expected_account_id: str
+    ) -> None:
+        return None
 
 
 def rows(store: OAuthStore, table: str) -> list[tuple[Any, ...]]:
@@ -1605,7 +1674,13 @@ def test_a_flood_of_accepted_authorization_requests_ends_in_429(store: OAuthStor
         Starlette(
             routes=[
                 *provider_module.auth_routes(ENV, provider=provider),
-                *consent.consent_routes(ENV, provider=provider, throttle=counters),
+                *consent.consent_routes(
+                    ENV,
+                    provider=provider,
+                    browser_identity=AppApiBrowserIdentitySource(ENV),
+                    nextcloud=exapp_target(ENV),
+                    throttle=counters,
+                ),
             ]
         )
     )
@@ -1631,7 +1706,13 @@ def test_the_flood_does_not_close_the_consent_screen_behind_it(store: OAuthStore
         Starlette(
             routes=[
                 *provider_module.auth_routes(ENV, provider=provider),
-                *consent.consent_routes(ENV, provider=provider, throttle=counters),
+                *consent.consent_routes(
+                    ENV,
+                    provider=provider,
+                    browser_identity=AppApiBrowserIdentitySource(ENV),
+                    nextcloud=exapp_target(ENV),
+                    throttle=counters,
+                ),
             ]
         )
     )
@@ -1695,6 +1776,48 @@ def test_the_return_page_shows_the_address_it_continues_to(store: OAuthStore) ->
 
 
 # --- CR-01: the decision belongs to the account that signed in ----------------------------
+
+
+def test_the_decision_consults_the_injected_browser_identity_source(store: OAuthStore) -> None:
+    provider = make(store)
+    register(provider)
+    _client, flow_id, _page = signed_in(provider)
+    source = StubBrowserIdentitySource()
+    deciding = TestClient(application_with_identity(provider, source))
+
+    response = decide(
+        deciding,
+        flow_id,
+        ui_consent.DECISION_APPROVE,
+        store=store,
+        user=None,
+    )
+
+    assert response.status_code == 200
+    assert source.expected == LOGIN_NAME
+    assert source.path == ui_consent.DECIDE_PATH
+    assert len(rows(store, "auth_codes")) == 1
+
+
+def test_a_browser_identity_source_failure_fails_closed(store: OAuthStore) -> None:
+    provider = make(store)
+    register(provider)
+    _client, flow_id, _page = signed_in(provider)
+    source = StubBrowserIdentitySource(fail=True)
+    deciding = TestClient(application_with_identity(provider, source))
+    before = snapshot(store)
+
+    response = decide(
+        deciding,
+        flow_id,
+        ui_consent.DECISION_APPROVE,
+        store=store,
+        user=None,
+    )
+
+    assert response.status_code == 400
+    assert "location" not in response.headers
+    assert snapshot(store) == before
 
 
 @pytest.mark.parametrize(
@@ -1790,7 +1913,16 @@ def test_an_authorize_body_that_cannot_be_parsed_is_a_page_and_never_a_traceback
     """The same on the front door, which reads a form when it is asked with a POST."""
     provider = make(store)
     register(provider)
-    client = TestClient(Starlette(routes=consent.consent_routes(ENV, provider=provider)))
+    client = TestClient(
+        Starlette(
+            routes=consent.consent_routes(
+                ENV,
+                provider=provider,
+                browser_identity=AppApiBrowserIdentitySource(ENV),
+                nextcloud=exapp_target(ENV),
+            )
+        )
+    )
 
     response = client.post(
         consent.AUTHORIZATION_PATH,
@@ -1896,6 +2028,7 @@ def out_of_band(store: OAuthStore, flow_id: str) -> None:
             flow_id,
             client_id=CLIENT_ID,
             nc_user=LOGIN_NAME,
+            nc_account_id=LOGIN_NAME,
             app_password=APP_PASSWORD,
             scopes="nextcloud",
             resource=RESOURCE,
@@ -2006,6 +2139,7 @@ def test_a_paused_account_never_reaches_the_consent_screen(store: OAuthStore) ->
 
     with respx.mock:
         respx.post(POLL_URL).mock(return_value=httpx.Response(200, json=poll_body()))
+        respx.get(ACCOUNT_URL).mock(return_value=httpx.Response(200, json=account_body()))
         revoke = respx.delete(REVOKE_URL).mock(return_value=httpx.Response(200, json={}))
         response = client.get(consent_url(flow_id, step=ui_consent.STEP_WAIT))
 
@@ -2028,6 +2162,7 @@ def test_an_account_that_is_not_paused_reaches_the_consent_screen(store: OAuthSt
 
     with respx.mock:
         respx.post(POLL_URL).mock(return_value=httpx.Response(200, json=poll_body()))
+        respx.get(ACCOUNT_URL).mock(return_value=httpx.Response(200, json=account_body()))
         revoke = respx.delete(REVOKE_URL).mock(return_value=httpx.Response(200, json={}))
         response = client.get(consent_url(flow_id, step=ui_consent.STEP_WAIT))
 
@@ -2046,6 +2181,7 @@ def test_a_switch_that_cannot_be_read_creates_no_authorization(store: OAuthStore
 
     with respx.mock:
         respx.post(POLL_URL).mock(return_value=httpx.Response(200, json=poll_body()))
+        respx.get(ACCOUNT_URL).mock(return_value=httpx.Response(200, json=account_body()))
         revoke = respx.delete(REVOKE_URL).mock(return_value=httpx.Response(200, json={}))
         response = client.get(consent_url(flow_id, step=ui_consent.STEP_WAIT))
 
@@ -2211,6 +2347,7 @@ def test_no_refusal_of_a_paused_account_writes_a_value_into_the_log(
 
     with respx.mock, caplog.at_level(logging.DEBUG, logger="mcp_connector"):
         respx.post(POLL_URL).mock(return_value=httpx.Response(200, json=poll_body()))
+        respx.get(ACCOUNT_URL).mock(return_value=httpx.Response(200, json=account_body()))
         respx.delete(REVOKE_URL).mock(return_value=httpx.Response(200, json={}))
         client.get(consent_url(flow_id, step=ui_consent.STEP_WAIT))
 
@@ -2321,9 +2458,181 @@ def test_the_login_flow_page_of_this_instance_is_rendered(store: OAuthStore) -> 
     assert f'href="{LOGIN_URL}"' in response.text
 
 
+INJECTED_BASE = "https://nc.injected.example"
+
+
+def test_the_consent_surface_uses_the_injected_target_and_not_the_environment(
+    store: OAuthStore,
+) -> None:
+    """Standalone OAuth, slice 2: sign in link check and poll follow the injected target.
+
+    The deploy environment still names ``BASE_URL``. A link on that host is refused once the
+    application was assembled with another target, a link on the injected host is rendered,
+    and the waiting screen polls the injected Nextcloud and nothing else.
+    """
+    provider = make(store)
+    register(provider)
+    client = TestClient(
+        Starlette(
+            routes=[
+                *provider_module.auth_routes(ENV, provider=provider),
+                *consent.consent_routes(
+                    ENV,
+                    provider=provider,
+                    browser_identity=AppApiBrowserIdentitySource(ENV),
+                    nextcloud=NextcloudTarget.from_url(INJECTED_BASE),
+                ),
+            ]
+        )
+    )
+    with respx.mock:
+        respx.post(INIT_URL).mock(return_value=httpx.Response(200, json=start_body()))
+        flow_id = flow_of(start(client))
+
+    injected_link = f"{INJECTED_BASE}/index.php/login/v2/flow/abc123"
+    environment_link = f"{BASE_URL}/index.php/login/v2/flow/abc123"
+    with respx.mock:
+        environment_poll = respx.post(POLL_URL).mock(return_value=httpx.Response(404))
+        injected_poll = respx.post(f"{INJECTED_BASE}{loginflow.POLL_PATH}").mock(
+            return_value=httpx.Response(404)
+        )
+        accepted = client.get(f"{consent_url(flow_id)}&{ui_consent.LOGIN_PARAM}={injected_link}")
+        refused = client.get(f"{consent_url(flow_id)}&{ui_consent.LOGIN_PARAM}={environment_link}")
+        waiting = client.get(consent_url(flow_id, step=ui_consent.STEP_WAIT))
+
+    assert f'href="{injected_link}"' in accepted.text
+    assert environment_link not in refused.text
+    assert waiting.status_code == 200
+    assert injected_poll.call_count == 1
+    assert environment_poll.call_count == 0
+
+
+def test_the_provider_opens_its_login_flow_at_its_injected_target(store: OAuthStore) -> None:
+    """The authorization endpoint starts the flow through the provider, so the provider's
+    target decides where, whatever the deploy environment names."""
+
+    async def provide() -> OAuthStore:
+        return store
+
+    provider = provider_module.NextcloudOAuthProvider(
+        nextcloud=NextcloudTarget.from_url(INJECTED_BASE),
+        env=ENV,
+        policy=registry.client_policy(ENV),
+        store_provider=provide,
+    )
+    register(provider)
+    client = TestClient(application(provider))
+    with respx.mock:
+        environment_init = respx.post(INIT_URL).mock(
+            return_value=httpx.Response(200, json=start_body())
+        )
+        injected_init = respx.post(f"{INJECTED_BASE}{loginflow.INIT_PATH}").mock(
+            return_value=httpx.Response(200, json=start_body())
+        )
+        response = start(client)
+
+    assert response.status_code == 302
+    assert (injected_init.call_count, environment_init.call_count) == (1, 0)
+
+
+def test_the_consent_factory_requires_an_explicit_target() -> None:
+    """No hidden fallback to ``exapp_settings``: the parameter has no default."""
+    parameter = inspect.signature(consent.consent_routes).parameters["nextcloud"]
+    assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
+    assert parameter.default is inspect.Parameter.empty
+    assert "exapp_settings" not in inspect.getsource(consent)
+
+
 def test_the_routes_are_declared_in_the_manifest_and_served_by_the_application() -> None:
     paths = [getattr(route, "path", "") for route in build_exapp_app(ENV).router.routes]
 
     assert paths.count("/authorize") == 1
     assert paths.count(ui_consent.CONSENT_PATH) == 1
     assert paths.count(ui_consent.DECIDE_PATH) == 1
+
+
+# --- the canonical account id (principal rule) -------------------------------------------
+
+ACCOUNT_ID = "a1b2c3d4"
+
+
+def signed_in_as_account(
+    provider: provider_module.NextcloudOAuthProvider, account: str
+) -> tuple[TestClient, str]:
+    """A sign in whose login name differs from its canonical account id (LDAP-like)."""
+    client, flow_id, _target = opened(provider)
+    with respx.mock:
+        respx.post(POLL_URL).mock(return_value=httpx.Response(200, json=poll_body()))
+        respx.get(ACCOUNT_URL).mock(return_value=httpx.Response(200, json=account_body(account)))
+        page = client.get(consent_url(flow_id, step=ui_consent.STEP_WAIT))
+    assert page.status_code == 200, page.text
+    return client, flow_id
+
+
+def test_the_connection_stores_the_login_name_and_the_account_id(store: OAuthStore) -> None:
+    provider = make(store)
+    register(provider)
+    _client, flow_id = signed_in_as_account(provider, ACCOUNT_ID)
+
+    row = asyncio.run(store.load_authorization(flow_id))
+
+    assert row is not None
+    assert row.nc_user == LOGIN_NAME
+    assert row.nc_account_id == ACCOUNT_ID
+
+
+def test_an_account_whose_login_name_differs_from_its_uid_can_decide(store: OAuthStore) -> None:
+    """LDAP and alternative login names: the fix of #5, kept on purpose.
+
+    AppAPI names the browser by its account id (the UID), while the sign in reports the
+    login name. Comparing the two made consent a total fail-closed outage for every such
+    account. The decision compares the account id, and the login name alone is refused.
+    Do not "fix" this back to ``nc_user``.
+    """
+    provider = make(store)
+    register(provider)
+    client, flow_id = signed_in_as_account(provider, ACCOUNT_ID)
+
+    refused = decide(client, flow_id, ui_consent.DECISION_APPROVE, store=store, user=LOGIN_NAME)
+    assert asyncio.run(store.load_flow(flow_id)) is not None, "nothing was decided"
+    granted = decide(client, flow_id, ui_consent.DECISION_APPROVE, store=store, user=ACCOUNT_ID)
+
+    assert refused.headers.get("location") is None
+    assert granted.status_code == 200, granted.text
+    assert asyncio.run(store.load_flow(flow_id)) is None, "the approval spent the flow"
+
+
+def test_a_pause_of_the_account_id_refuses_the_sign_in(store: OAuthStore) -> None:
+    provider = make(store)
+    register(provider)
+    asyncio.run(store.set_access(ACCOUNT_ID, disabled=True))
+    client, flow_id, _target = opened(provider)
+
+    with respx.mock:
+        respx.post(POLL_URL).mock(return_value=httpx.Response(200, json=poll_body()))
+        respx.get(ACCOUNT_URL).mock(return_value=httpx.Response(200, json=account_body(ACCOUNT_ID)))
+        revoke = respx.delete(REVOKE_URL).mock(return_value=httpx.Response(200, json={}))
+        client.get(consent_url(flow_id, step=ui_consent.STEP_WAIT))
+
+    assert revoke.call_count == 1
+    assert asyncio.run(store.load_authorization(flow_id)) is None
+
+
+def test_an_unresolved_account_stores_nothing_and_hands_the_password_back(
+    store: OAuthStore,
+) -> None:
+    provider = make(store)
+    register(provider)
+    client, flow_id, _target = opened(provider)
+
+    with respx.mock:
+        respx.post(POLL_URL).mock(return_value=httpx.Response(200, json=poll_body()))
+        respx.get(ACCOUNT_URL).mock(return_value=httpx.Response(500, json={}))
+        revoke = respx.delete(REVOKE_URL).mock(return_value=httpx.Response(200, json={}))
+        response = client.get(consent_url(flow_id, step=ui_consent.STEP_WAIT))
+
+    assert response.status_code == 500
+    assert strings.ERROR_GENERIC_TITLE in response.text
+    assert revoke.call_count == 1
+    assert asyncio.run(store.load_authorization(flow_id)) is None
+    assert asyncio.run(store.load_flow(flow_id)) is None, "the spent poll leaves no waiting page"

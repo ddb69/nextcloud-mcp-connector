@@ -45,6 +45,7 @@ from starlette.testclient import TestClient
 from mcp_connector import config, entry_http
 from mcp_connector.entry_exapp import MCP_PATH, build_exapp_app
 from mcp_connector.exapp.middleware import RequireAppApi
+from mcp_connector.exapp.target import exapp_target
 from mcp_connector.oauth import cimd, loginflow, metadata, registry
 from mcp_connector.oauth import provider as provider_module
 from mcp_connector.oauth import throttle as throttle_module
@@ -132,6 +133,7 @@ def build(tmp_path: Path, **env: str) -> tuple[provider_module.NextcloudOAuthPro
     policy = registry.client_policy(ENV | env)
     return (
         provider_module.NextcloudOAuthProvider(
+            nextcloud=exapp_target(ENV | env),
             env=ENV | env,
             policy=policy,
             store_provider=opener(subject),
@@ -847,6 +849,7 @@ async def test_a_running_session_survives_a_document_host_outage(tmp_path: Path)
         CIMD_AUTH_ID,
         client_id=CIMD_ID,
         nc_user=CIMD_NC_USER,
+        nc_account_id=CIMD_NC_USER,
         app_password=CIMD_APP_PASSWORD,
         scopes=metadata.TOOL_SCOPE,
         resource=RESOURCE,
@@ -890,6 +893,7 @@ async def test_a_rotation_at_the_freshness_deadline_waits_on_no_document_host(
         CIMD_AUTH_ID,
         client_id=CIMD_ID,
         nc_user=CIMD_NC_USER,
+        nc_account_id=CIMD_NC_USER,
         app_password=CIMD_APP_PASSWORD,
         scopes=metadata.TOOL_SCOPE,
         resource=RESOURCE,
@@ -927,6 +931,7 @@ async def test_the_token_endpoint_answers_a_document_client_from_its_stored_row(
         CIMD_AUTH_ID,
         client_id=CIMD_ID,
         nc_user=CIMD_NC_USER,
+        nc_account_id=CIMD_NC_USER,
         app_password=CIMD_APP_PASSWORD,
         scopes=metadata.TOOL_SCOPE,
         resource=RESOURCE,
@@ -996,6 +1001,7 @@ async def test_a_document_identity_keeps_its_row_and_its_connections_past_the_tt
         CIMD_AUTH_ID,
         client_id=CIMD_ID,
         nc_user=CIMD_NC_USER,
+        nc_account_id=CIMD_NC_USER,
         app_password=CIMD_APP_PASSWORD,
         scopes=metadata.TOOL_SCOPE,
         resource=f"{PUBLIC_URL}/mcp",
@@ -1160,6 +1166,7 @@ async def approved(
         AUTH_ID,
         client_id=CLIENT_ID,
         nc_user=NC_USER,
+        nc_account_id=NC_USER,
         app_password=APP_PASSWORD,
         scopes=metadata.TOOL_SCOPE,
         resource=resource,
@@ -1467,6 +1474,7 @@ async def approved_on_a_relaxed_port(
         AUTH_ID,
         client_id=CLIENT_ID,
         nc_user=NC_USER,
+        nc_account_id=NC_USER,
         app_password=APP_PASSWORD,
         scopes=metadata.TOOL_SCOPE,
         resource=RESOURCE,
@@ -1576,7 +1584,16 @@ async def test_every_token_path_refuses_what_this_server_never_issued(tmp_path: 
 
 def routes(**env: str) -> list[str]:
     policy = registry.client_policy(ENV | env)
-    subject = provider_module.NextcloudOAuthProvider(env=ENV | env, policy=policy)
+
+    async def never_opened() -> OAuthStore:
+        raise AssertionError("building the routes opens no store")
+
+    subject = provider_module.NextcloudOAuthProvider(
+        nextcloud=exapp_target(ENV | env),
+        env=ENV | env,
+        policy=policy,
+        store_provider=never_opened,
+    )
     return [route.path for route in provider_module.auth_routes(ENV | env, provider=subject)]
 
 
@@ -1687,7 +1704,10 @@ def client(tmp_path: Path, **env: str) -> TestClient:
     subject = OAuthStore(tmp_path / "oauth.sqlite3", KEY)
     policy = registry.client_policy(ENV | env)
     instance = provider_module.NextcloudOAuthProvider(
-        env=ENV | env, policy=policy, store_provider=opener(subject)
+        nextcloud=exapp_target(ENV | env),
+        env=ENV | env,
+        policy=policy,
+        store_provider=opener(subject),
     )
     return TestClient(Starlette(routes=provider_module.auth_routes(ENV | env, provider=instance)))
 
@@ -2073,6 +2093,7 @@ async def test_a_sign_in_nobody_finished_hands_its_credential_back(tmp_path: Pat
         "the-flow-nobody-came-back-to",
         client_id=CLIENT_ID,
         nc_user=NC_USER,
+        nc_account_id=NC_USER,
         app_password=APP_PASSWORD,
         scopes=metadata.TOOL_SCOPE,
         resource=RESOURCE,
@@ -2097,6 +2118,7 @@ async def test_the_sweep_leaves_a_running_sign_in_and_a_live_connection_alone(
         "a-sign-in-that-is-still-running",
         client_id=CLIENT_ID,
         nc_user=NC_USER,
+        nc_account_id=NC_USER,
         app_password=APP_PASSWORD,
         scopes=metadata.TOOL_SCOPE,
         resource=RESOURCE,
@@ -2122,6 +2144,7 @@ async def test_the_sweep_takes_at_most_a_handful_per_call(tmp_path: Path) -> Non
             f"abandoned-{index}",
             client_id=CLIENT_ID,
             nc_user=NC_USER,
+            nc_account_id=NC_USER,
             app_password=APP_PASSWORD,
             scopes=metadata.TOOL_SCOPE,
             resource=RESOURCE,
@@ -2157,6 +2180,7 @@ async def test_an_expired_client_hands_its_app_passwords_back_before_it_is_delet
         AUTH_ID,
         client_id=CLIENT_ID,
         nc_user=NC_USER,
+        nc_account_id=NC_USER,
         app_password=APP_PASSWORD,
         scopes=metadata.TOOL_SCOPE,
         resource=RESOURCE,
@@ -2187,6 +2211,7 @@ async def test_the_client_lookup_hands_the_credentials_back_when_it_expires_a_ro
         AUTH_ID,
         client_id=CLIENT_ID,
         nc_user=NC_USER,
+        nc_account_id=NC_USER,
         app_password=APP_PASSWORD,
         scopes=metadata.TOOL_SCOPE,
         resource=RESOURCE,
@@ -2223,6 +2248,7 @@ async def test_an_expired_client_hands_back_more_connections_than_the_sweep_limi
             handle,
             client_id=CLIENT_ID,
             nc_user=NC_USER,
+            nc_account_id=NC_USER,
             app_password=APP_PASSWORD,
             scopes=metadata.TOOL_SCOPE,
             resource=RESOURCE,
@@ -2269,6 +2295,7 @@ async def test_a_revocation_that_fails_still_removes_the_expired_client(
         AUTH_ID,
         client_id=CLIENT_ID,
         nc_user=NC_USER,
+        nc_account_id=NC_USER,
         app_password=APP_PASSWORD,
         scopes=metadata.TOOL_SCOPE,
         resource=RESOURCE,

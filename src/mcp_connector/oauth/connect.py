@@ -41,7 +41,6 @@ from starlette.responses import RedirectResponse, Response
 from starlette.routing import Route
 
 from ..errors import ToolError
-from ..exapp.auth import appapi_user, is_user
 from ..exapp.responses import NO_STORE, form_or_none
 from ..exapp.ui import errors
 from ..exapp.ui.connect import (
@@ -56,8 +55,10 @@ from ..exapp.ui.connect import (
     result_page,
     waiting_page,
 )
+from ..nextcloud.target import NextcloudTarget
 from . import loginflow
-from .store import OAuthStore, store_opener
+from .browser_identity import BrowserIdentitySource
+from .store import OAuthStore
 from .throttle import CLASS_CONNECT, CLASS_CONNECT_START, FLOW_LIMIT, Throttle, Throttled
 
 __all__ = [
@@ -101,10 +102,19 @@ type StoreProvider = Callable[[], Awaitable[OAuthStore]]
 def connect_routes(
     env: Mapping[str, str] | None = None,
     *,
-    store_provider: StoreProvider | None = None,
+    nextcloud: NextcloudTarget,
+    store_provider: StoreProvider,
+    browser_identity: BrowserIdentitySource,
     throttle: Throttle | None = None,
 ) -> list[Route]:
-    """Build the three onboarding routes against one environment.
+    """Build the three onboarding routes against one environment and one Nextcloud.
+
+    ``nextcloud`` is the Nextcloud every login flow of these routes starts at, is polled at and
+    hands its app password back to. The deployment resolves it once; no route reads it.
+
+    ``browser_identity`` decides whether the browser that loads the result is the account
+    that signed in (CR-01), the same source the consent decision asks. The ExApp passes its
+    AppAPI adapter, so the comparison there is the one this route made before.
 
     Throttled as browser paths, and in two classes rather than one: this is the surface on
     which an anonymous caller can make this server open a Nextcloud login flow, which is
@@ -119,12 +129,13 @@ def connect_routes(
     The store is opened once per application and not once per request, and the first open is
     also where :meth:`OAuthStore.purge_expired` runs: this project has no cron and no
     scheduler, so the sweep that removes what ran out hangs on the first use of the store
-    (T-03-17). :func:`~mcp_connector.oauth.store.store_opener` is what does that, and it is
-    called and not copied: this factory carried its own word for word twin of the double
-    checked locking until IN-02 of 05-REVIEW.md, in the one branch no test of this route
-    walked, so a change to one side would silently have missed the other.
+    (T-03-17). The deployment passes the opener in, built by
+    :func:`~mcp_connector.oauth.store.explicit_store_opener`, and this factory never builds
+    one of its own: it carried a word for word twin of the double checked locking until
+    IN-02 of 05-REVIEW.md, and a default opener here would decide the store directory and
+    the data key for a deployment that never chose them.
     """
-    store = store_provider or store_opener(env)
+    store = store_provider
 
     async def invitation(request: Request) -> Response:
         """The page that explains the way and offers the one button that starts it."""
@@ -145,11 +156,11 @@ def connect_routes(
             # own: the invitation is exactly the next step, with a status that says the
             # request was not one this route understands.
             return _with_status(invitation_page(env=env), 400)
-        return await _start(store, env)
+        return await _start(store, nextcloud, env)
 
     async def wait(request: Request) -> Response:
         """One poll per load, and one of the four ends: waiting, result, expired, failed."""
-        return await _wait(request, store, env)
+        return await _wait(request, store, nextcloud, browser_identity, env)
 
     counters = throttle if throttle is not None else Throttle()
     invitation_route = Route(CONNECT_PATH, invitation, methods=["GET"])
@@ -175,7 +186,9 @@ def connect_routes(
     return [invitation_route, begin_route, wait_route]
 
 
-async def _start(store: StoreProvider, env: Mapping[str, str] | None) -> Response:
+async def _start(
+    store: StoreProvider, nextcloud: NextcloudTarget, env: Mapping[str, str] | None
+) -> Response:
     """Open a sign in at Nextcloud and remember it long enough to ask about it.
 
     The per account switch of EXAPP-02 is deliberately *not* checked here, and the absence is
@@ -189,7 +202,7 @@ async def _start(store: StoreProvider, env: Mapping[str, str] | None) -> Respons
     if isinstance(opened, Response):
         return opened
 
-    started = await loginflow.start_flow(ONBOARDING_CLIENT_NAME, env=env)
+    started = await loginflow.start_flow(ONBOARDING_CLIENT_NAME, target=nextcloud)
     if started is None:
         # loginflow logged what happened; nothing of the request is repeated here.
         return _generic("the login flow could not be started", env)
@@ -233,7 +246,13 @@ async def _cancel(flow_id: str, store: StoreProvider, env: Mapping[str, str] | N
     return RedirectResponse(CONNECT_PATH, status_code=303, headers=dict(NO_STORE))
 
 
-async def _wait(request: Request, store: StoreProvider, env: Mapping[str, str] | None) -> Response:
+async def _wait(
+    request: Request,
+    store: StoreProvider,
+    nextcloud: NextcloudTarget,
+    browser_identity: BrowserIdentitySource,
+    env: Mapping[str, str] | None,
+) -> Response:
     """The waiting screen: one poll, then one of the four ends of this flow.
 
     The result end of it is the one page of this project that writes a credential into a
@@ -268,20 +287,38 @@ async def _wait(request: Request, store: StoreProvider, env: Mapping[str, str] |
         await opened.delete_flow(flow_id)
         return _page(errors.error_page("E4", env=env))
 
-    result = await loginflow.poll_once(row.poll_token, env=env)
+    result = await loginflow.poll_once(row.poll_token, target=nextcloud)
     if result.outcome == loginflow.POLL_PENDING:
         return waiting_page(flow_id, env=env)
     if result.outcome != loginflow.POLL_DONE or result.credentials is None:
         return _generic("the login flow poll failed", env)
 
     credentials = result.credentials
-    if not is_user(appapi_user(request, env=env), credentials.login_name):
+    # The principal of this sign in: the canonical account id behind the fresh app password.
+    # Without it nothing is handed over, and the credential goes back (pitfall 13).
+    account = await loginflow.account_id(
+        credentials.login_name, credentials.app_password, target=nextcloud
+    )
+    if account is None:
+        await loginflow.revoke_app_password(
+            credentials.login_name, credentials.app_password, target=nextcloud
+        )
+        await _forget_flow(opened, flow_id)
+        return _generic("the account of the finished sign in could not be resolved", env)
+
+    try:
+        identified = await browser_identity.identifies(request, account)
+    except Exception:
+        # A source is a security boundary: its failure is a refusal, never a fallback.
+        logger.error("the browser identity source could not decide the onboarding identity")
+        identified = False
+    if not identified:
         # Not the browser of the account that signed in, so the credential is not shown to
         # it. It exists at Nextcloud from the moment of the poll, and nobody will ever use
         # it now, so it goes back the same way a failed write hands it back (pitfall 13).
         logger.warning("a finished sign in was not handed to the account that signed in")
         await loginflow.revoke_app_password(
-            credentials.login_name, credentials.app_password, env=env
+            credentials.login_name, credentials.app_password, target=nextcloud
         )
         await opened.delete_flow(flow_id)
         return _page(errors.error_page("E3", env=env))
@@ -294,14 +331,14 @@ async def _wait(request: Request, store: StoreProvider, env: Mapping[str, str] |
     # the credential of a paused account may not be rendered, and because both refusals owe
     # the same thing: the app password exists at Nextcloud from the 200 of the poll, and this
     # refusal is the reason nobody will ever use it (pitfall 13, D-34).
-    disabled = await _access_disabled(opened, credentials.login_name)
+    disabled = await _access_disabled(opened, account)
     if disabled is not False:
         # ``None`` is the store that could not answer, and that is never a "no" (fail closed,
         # D-37, the same choice the transport boundary of phase 4 makes).
         if disabled is True:
             logger.info("a finished sign in was refused because the account has paused MCP access")
         await loginflow.revoke_app_password(
-            credentials.login_name, credentials.app_password, env=env
+            credentials.login_name, credentials.app_password, target=nextcloud
         )
         await _forget_flow(opened, flow_id)
         if disabled is True:
@@ -318,7 +355,7 @@ async def _wait(request: Request, store: StoreProvider, env: Mapping[str, str] |
         # The credential exists in Nextcloud at this point and would stay there unused, so
         # it is handed back instead of being left behind (pitfall 13, D-34).
         await loginflow.revoke_app_password(
-            credentials.login_name, credentials.app_password, env=env
+            credentials.login_name, credentials.app_password, target=nextcloud
         )
         return _generic("the finished flow record could not be removed", env)
 

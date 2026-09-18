@@ -78,6 +78,7 @@ from starlette.requests import Request
 from starlette.responses import Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from .. import config
 from ..exapp.responses import json_response
 from ..exapp.ui import errors
 
@@ -87,6 +88,8 @@ __all__ = [
     "CLASS_CONNECT",
     "CLASS_CONNECTIONS",
     "CLASS_CONNECT_START",
+    "CLASS_OIDC_CALLBACK",
+    "CLASS_OIDC_START",
     "CLASS_REGISTER",
     "CLASS_REVOKE",
     "CLASS_TOKEN",
@@ -100,7 +103,7 @@ __all__ = [
     "source_of",
 ]
 
-#: The eight path classes of this application. Separate counters, because a person fighting
+#: The path classes of this application. Separate counters, because a person fighting
 #: with the consent screen must not close the endpoint a working connector refreshes at.
 CLASS_TOKEN = "token"  # noqa: S105 - the name of a path class, not a credential
 CLASS_REGISTER = "register"
@@ -122,6 +125,12 @@ CLASS_CONNECTIONS = "connections"
 #: screens behind them would close a waiting page that is doing nothing wrong.
 CLASS_CONNECT_START = "connect-start"
 CLASS_AUTHORIZE_START = "authorize-start"
+
+#: The standalone OIDC browser routes (``oauth/oidc_routes``). The start counts every
+#: request, because each one writes a sign in row; the callback counts refusals, like the
+#: consent screen it leads back to.
+CLASS_OIDC_START = "oidc-start"
+CLASS_OIDC_CALLBACK = "oidc-callback"
 
 #: How many failed attempts one source may make per path class before it has to wait. Ten
 #: is generous for every legitimate shape of failure (a mistyped link, a stale tab, a
@@ -349,6 +358,8 @@ class Throttled:
         self._count_all = count_all
         self._limit = limit
         self._identity = identity
+        #: Read once per application, like every other configuration of this class.
+        self._trust_forwarded = config.trust_forwarded_for(env)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":  # pragma: no cover - these routes are HTTP only
@@ -365,7 +376,7 @@ class Throttled:
                 return
             source, shared = account, False
         else:
-            source, shared = source_of(request), True
+            source, shared = source_of(request, trust_forwarded=self._trust_forwarded), True
 
         wait = self._throttle.retry_after(
             self._path_class, source, limit=self._limit, shared=shared
@@ -420,7 +431,7 @@ class Throttled:
         return page
 
 
-def source_of(request: Request) -> str:
+def source_of(request: Request, *, trust_forwarded: bool = True) -> str:
     """Who is asking, as well as this topology can tell.
 
     Behind HaRP the peer of every request is the proxy, so the forwarded address is the
@@ -429,7 +440,14 @@ def source_of(request: Request) -> str:
     and the ceiling of the path class is what holds when somebody forges it. The first
     entry of the header is taken, because that is the original client in the convention of
     RFC 7239 and because a longer chain is the proxies, not the caller.
+
+    ``trust_forwarded=False`` is the deployment without a proxy in front: there the peer
+    address is the real one, and reading a header the caller writes would let one source
+    spend the limit of every other. It comes from
+    :func:`mcp_connector.config.trust_forwarded_for`, never from a request.
     """
-    forwarded = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
     peer = request.client.host if request.client else ""
+    if not trust_forwarded:
+        return peer
+    forwarded = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
     return forwarded or peer or ""

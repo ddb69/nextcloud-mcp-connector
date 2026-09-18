@@ -50,6 +50,7 @@ from starlette.testclient import TestClient
 from mcp_connector import config
 from mcp_connector.audit import store as audit
 from mcp_connector.exapp import admin_settings, audit_verify, lifecycle, occ, purge, settings_form
+from mcp_connector.exapp.target import exapp_target
 from mcp_connector.nextcloud.clients.xml import hardened_parser
 from mcp_connector.oauth import crypto, loginflow
 from mcp_connector.oauth.store import OAuthStore
@@ -123,7 +124,11 @@ class Deployment:
         self.audit_path = tmp_path / audit.AUDIT_FILENAME
         self.audit = audit.AuditStore(self.audit_path)
         self.client = TestClient(
-            Starlette(routes=purge.purge_routes(ENV, store_provider=self._open))
+            Starlette(
+                routes=purge.purge_routes(
+                    ENV, nextcloud=exapp_target(ENV), store_provider=self._open
+                )
+            )
         )
 
     async def _open(self) -> OAuthStore:
@@ -141,6 +146,7 @@ class Deployment:
                 auth_id,
                 client_id=CLIENT_ID,
                 nc_user=nc_user,
+                nc_account_id=nc_user,
                 app_password=password,
                 scopes="nextcloud",
                 resource=f"{PUBLIC_URL}/mcp",
@@ -990,7 +996,11 @@ def test_a_deployment_without_a_readable_store_says_so_and_never_pretends(
     async def broken() -> OAuthStore:
         raise RuntimeError("this volume is not readable")
 
-    client = TestClient(Starlette(routes=purge.purge_routes(ENV, store_provider=broken)))
+    client = TestClient(
+        Starlette(
+            routes=purge.purge_routes(ENV, nextcloud=exapp_target(ENV), store_provider=broken)
+        )
+    )
 
     with respx.mock:
         wire = Wire()

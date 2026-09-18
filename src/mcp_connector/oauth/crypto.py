@@ -28,9 +28,13 @@ so a moved ciphertext is refused instead of decrypted (T-03-12).
 import hashlib
 import hmac
 import logging
+import os
+import re
 import secrets
+import stat
 import time
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -56,8 +60,10 @@ __all__ = [
     "decrypt",
     "delete_key",
     "encrypt",
+    "file_key",
     "form_token",
     "form_token_valid",
+    "key_check",
 ]
 
 #: AES-256. The size is fixed here instead of being inferred from the stored value, so a
@@ -94,6 +100,8 @@ FORM_TOKEN_WINDOW = 3600
 PURPOSE_CONSENT = "consent"
 PURPOSE_DISCONNECT = "disconnect"
 PURPOSE_SWITCH = "switch"
+#: The POST that sends a browser to the standalone identity provider (``oauth/oidc_routes``).
+PURPOSE_OIDC_START = "oidc-start"
 
 #: The AppAPI route that stores ExApp configuration. ``sensitive`` marks the value as one
 #: Nextcloud must not show in any administrative interface.
@@ -157,6 +165,22 @@ def decrypt(key: bytes, blob: bytes, *, aad: str) -> bytes:
         return AESGCM(key).decrypt(blob[:NONCE_BYTES], blob[NONCE_BYTES:], aad.encode("utf-8"))
     except InvalidTag:
         raise DecryptionRejected from None
+
+
+#: What :func:`key_check` derives. Versioned like the form label, and distinct from it, so a
+#: check value can never double as a form token or the other way round.
+_KEY_CHECK_LABEL = b"store-key-check-v1"
+
+
+def key_check(key: bytes) -> str:
+    """A value that identifies ``key`` to a store without revealing anything about it.
+
+    An HMAC over a fixed label: equal for the same key, unrelated for any other, and useless
+    for recovering the key. A store keeps it so that a wrong key is refused when the store is
+    opened, before any protected row is read (standalone OAuth, plan section 4).
+    """
+    _check_key(key)
+    return hmac.new(key, _KEY_CHECK_LABEL, hashlib.sha256).hexdigest()
 
 
 def form_token(key: bytes, handle: str, *, purpose: str, now: float | None = None) -> str:
@@ -244,6 +268,98 @@ def _window(now: float | None) -> int:
 def _unix_time() -> float:
     """The one clock this module reads, so a test can name a moment without sleeping."""
     return time.time()
+
+
+_FILE_KEY_HINT = (
+    "The key file holds exactly 64 hexadecimal characters (32 bytes), for example from "
+    "'openssl rand -hex 32'. It is mounted as a secret with mode 0400, 0440, 0600 or 0640: "
+    "never readable by others and never writable by the group. This app never generates it, "
+    "because a new key makes every stored connection unreadable."
+)
+
+#: Everything a key file may not grant: any access for others, write access for the group.
+#: Group read stays allowed because Kubernetes hands secrets to a pod through ``fsGroup``.
+_KEY_FILE_FORBIDDEN_BITS = stat.S_IRWXO | stat.S_IWGRP
+
+#: A key file is 64 characters plus a line ending. Anything far larger is not a key file,
+#: and reading it whole would be a gift to whoever can point this setting at a device.
+_KEY_FILE_READ_LIMIT = 4096
+
+#: The whole file content after stripping the ends. Checked as one pattern because
+#: ``bytes.fromhex`` skips whitespace between pairs, so "64 characters" alone would let a
+#: file with inner blanks through as a shorter key.
+_KEY_FILE_PATTERN = re.compile(r"[0-9a-fA-F]{64}")
+
+#: POSIX mode bits are the protection this check relies on. Windows models only a read-only
+#: flag in them, so there the check is skipped and the ACL of the secret is the boundary,
+#: which the standalone documentation has to say.
+_POSIX_MODES = os.name != "nt"
+
+
+def file_key(path: Path) -> bytes:
+    """Read the data key of a deployment that is not an ExApp from a mounted secret file.
+
+    The counterpart of :func:`data_key` for a deployment without AppAPI. It only ever reads:
+    a missing file is a named error and never the start of a fresh key, for the reason
+    :func:`data_key` gives (pitfall 11, T-03-14). The file has to be a regular file (a
+    symlink to one is accepted, which is how Kubernetes mounts secrets), must grant nothing
+    to others and no write access to its group, and has to hold exactly :data:`KEY_BYTES`
+    bytes as hex, surrounding whitespace allowed. No error message repeats the content.
+
+    The file is opened once and every check runs on that descriptor, so the checked file is
+    the file that is read even if the path or a link target is swapped in between.
+    ``O_NONBLOCK`` keeps a FIFO planted at the path from blocking the start.
+    """
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except FileNotFoundError:
+        raise ToolError(message="The data key file does not exist.", hint=_FILE_KEY_HINT) from None
+    except OSError:
+        raise ToolError(message="The data key file is not readable.", hint=_FILE_KEY_HINT) from None
+    try:
+        status = os.fstat(descriptor)
+        if not stat.S_ISREG(status.st_mode):
+            raise ToolError(message="The data key path is not a regular file.", hint=_FILE_KEY_HINT)
+        if _POSIX_MODES and status.st_mode & _KEY_FILE_FORBIDDEN_BITS:
+            raise ToolError(
+                message="The data key file permissions are too open.", hint=_FILE_KEY_HINT
+            )
+        raw = _read_limited(descriptor)
+    finally:
+        os.close(descriptor)
+    try:
+        text = raw.decode("ascii").strip()
+    except UnicodeDecodeError:
+        raise ToolError(message="The data key file is not readable.", hint=_FILE_KEY_HINT) from None
+    if len(text) != KEY_BYTES * 2:
+        raise ToolError(message="The data key file has the wrong length.", hint=_FILE_KEY_HINT)
+    if _KEY_FILE_PATTERN.fullmatch(text) is None:
+        raise ToolError(message="The data key file is not hexadecimal.", hint=_FILE_KEY_HINT)
+    key = bytes.fromhex(text)
+    if len(key) != KEY_BYTES:  # unreachable after the pattern; kept as the stated invariant
+        raise ToolError(message="The data key file has the wrong length.", hint=_FILE_KEY_HINT)
+    return key
+
+
+def _read_limited(descriptor: int) -> bytes:
+    """At most :data:`_KEY_FILE_READ_LIMIT` plus one bytes, so an oversized file is refused."""
+    chunks: list[bytes] = []
+    size = 0
+    while size <= _KEY_FILE_READ_LIMIT:
+        try:
+            chunk = os.read(descriptor, _KEY_FILE_READ_LIMIT + 1 - size)
+        except OSError:
+            raise ToolError(
+                message="The data key file is not readable.", hint=_FILE_KEY_HINT
+            ) from None
+        if not chunk:
+            break
+        chunks.append(chunk)
+        size += len(chunk)
+    if size > _KEY_FILE_READ_LIMIT:
+        raise ToolError(message="The data key file has the wrong length.", hint=_FILE_KEY_HINT)
+    return b"".join(chunks)
 
 
 async def data_key(env: Mapping[str, str] | None = None) -> bytes:

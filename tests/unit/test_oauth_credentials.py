@@ -28,6 +28,7 @@ import pytest
 from starlette.requests import Request
 
 from mcp_connector import config, deps
+from mcp_connector.exapp.target import exapp_target
 from mcp_connector.nextcloud.credentials import MODE_BASIC, MODES
 from mcp_connector.oauth import provider as provider_module
 from mcp_connector.oauth import registry
@@ -128,6 +129,7 @@ class FakeContext:
 def identity(**fields: Any) -> OAuthIdentity:
     values: dict[str, Any] = {
         "nc_user": NC_USER,
+        "principal": NC_USER,
         "app_password": APP_PASSWORD,
         "auth_id": AUTH_ID,
         "client_id": CLIENT_ID,
@@ -222,7 +224,10 @@ async def test_the_durchstich_from_a_stored_token_to_the_credentials(
         return store
 
     provider = provider_module.NextcloudOAuthProvider(
-        env=ENV, policy=registry.client_policy(ENV), store_provider=opener
+        nextcloud=exapp_target(ENV),
+        env=ENV,
+        policy=registry.client_policy(ENV),
+        store_provider=opener,
     )
     verifier = StoreTokenVerifier(store_provider=opener, get_client=provider.get_client, env=ENV)
     await store.save_client(CLIENT_ID, metadata_json=REGISTRATION)
@@ -230,6 +235,7 @@ async def test_the_durchstich_from_a_stored_token_to_the_credentials(
         AUTH_ID,
         client_id=CLIENT_ID,
         nc_user=NC_USER,
+        nc_account_id=NC_USER,
         app_password=APP_PASSWORD,
         scopes=TOOL_SCOPE,
         resource=RESOURCE,
@@ -288,3 +294,14 @@ def test_no_refusal_ever_repeats_a_header_value(exapp_env: None, headers: dict[s
             assert value not in text
         assert APP_SECRET not in text
         assert APP_PASSWORD not in text
+
+
+def test_the_credentials_use_the_login_name_and_not_the_principal(exapp_env: None) -> None:
+    creds = deps.resolve_credentials(
+        FakeContext(
+            headers=appapi_headers(user=""),
+            identity=identity(nc_user="alice@example.com", principal="a1b2c3"),
+        )
+    )
+
+    assert creds.user == "alice@example.com"

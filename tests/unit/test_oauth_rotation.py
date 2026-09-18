@@ -35,6 +35,7 @@ from mcp.server.auth.provider import RefreshToken, TokenError
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 
 from mcp_connector import config
+from mcp_connector.exapp.target import exapp_target
 from mcp_connector.oauth import provider as provider_module
 from mcp_connector.oauth import registry
 from mcp_connector.oauth import verifier as verifier_module
@@ -115,7 +116,11 @@ def build(
     store = OAuthStore(tmp_path / "oauth.sqlite3", KEY)
     policy = registry.client_policy(ENV | env)
     subject = provider_module.NextcloudOAuthProvider(
-        env=ENV | env, policy=policy, store_provider=opener(store), clock=clock
+        nextcloud=exapp_target(ENV | env),
+        env=ENV | env,
+        policy=policy,
+        store_provider=opener(store),
+        clock=clock,
     )
     return subject, store
 
@@ -130,6 +135,7 @@ async def connected(
         AUTH_ID,
         client_id=CLIENT_ID,
         nc_user=NC_USER,
+        nc_account_id=NC_USER,
         app_password=APP_PASSWORD,
         scopes=TOOL_SCOPE,
         resource=resource,
@@ -471,6 +477,7 @@ async def test_a_connection_for_another_audience_never_rotates(
         AUTH_ID,
         client_id=CLIENT_ID,
         nc_user=NC_USER,
+        nc_account_id=NC_USER,
         app_password=APP_PASSWORD,
         scopes=TOOL_SCOPE,
         resource=resource,

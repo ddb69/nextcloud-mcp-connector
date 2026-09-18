@@ -89,9 +89,9 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .. import config
 from ..errors import IssuerRefused
-from ..exapp.auth import is_user
 from ..exapp.responses import NO_STORE, form_or_none, json_response
 from ..exapp.ui.consent import consent_url
+from ..nextcloud.target import NextcloudTarget
 from . import cimd, loginflow
 from .metadata import (
     AS_METADATA_SUFFIX,
@@ -101,6 +101,7 @@ from .metadata import (
     RESOURCE_SUFFIX,
     TOOL_SCOPE,
 )
+from .principal import login_name_of, principal_of, same_principal
 from .registry import (
     IDLE_REGISTRATION_TTL,
     UNUSED_REGISTRATION_TTL,
@@ -116,7 +117,6 @@ from .store import (
     STATE_REVOKED,
     ClientRow,
     OAuthStore,
-    store_opener,
     token_hash,
 )
 from .throttle import CLASS_REGISTER, CLASS_REVOKE, CLASS_TOKEN, Throttle, Throttled
@@ -244,15 +244,19 @@ class NextcloudOAuthProvider(
     def __init__(
         self,
         *,
+        nextcloud: NextcloudTarget,
         env: Mapping[str, str] | None = None,
         policy: ClientPolicy | None = None,
-        store_provider: StoreProvider | None = None,
+        store_provider: StoreProvider,
         clock: Callable[[], float] | None = None,
         resolver: cimd.AddressLookup | None = None,
     ) -> None:
         self._env = env
+        #: The Nextcloud every login flow of this provider starts at and every app password
+        #: it hands back belongs to. Injected, never read from the environment here.
+        self._nextcloud = nextcloud
         self._policy = policy if policy is not None else client_policy(env)
-        self._store = store_provider if store_provider is not None else store_opener(env)
+        self._store = store_provider
         #: The canonical audience of every token this server issues (RFC 8707). Built from
         #: the configured public URL and never from a request, like every other identity
         #: statement of this app (T-03-02).
@@ -670,7 +674,7 @@ class NextcloudOAuthProvider(
         if not check_resource_allowed(resource, self._resource):
             raise AuthorizeError("invalid_target", "the resource does not match this server")
 
-        started = await loginflow.start_flow(client.client_name or "", env=self._env)
+        started = await loginflow.start_flow(client.client_name or "", target=self._nextcloud)
         if started is None:
             # loginflow logged what happened; nothing of the request is repeated here.
             raise AuthorizeError("temporarily_unavailable", "the sign in could not be started")
@@ -745,7 +749,7 @@ class NextcloudOAuthProvider(
             redirect_uri=AnyUrl(row.redirect_uri),
             redirect_uri_provided_explicitly=row.redirect_uri_explicit,
             resource=row.resource,
-            subject=authorization.nc_user,
+            subject=principal_of(authorization),
         )
 
     async def exchange_authorization_code(
@@ -854,7 +858,7 @@ class NextcloudOAuthProvider(
             client_id=authorization.client_id,
             scopes=authorization.scopes.split(),
             expires_at=row.expires_at,
-            subject=authorization.nc_user,
+            subject=principal_of(authorization),
         )
 
     async def exchange_refresh_token(
@@ -994,7 +998,7 @@ class NextcloudOAuthProvider(
         before it ever gets here, and that is exactly the point: a method that ends somebody
         else's access may not rely on its one caller for the only ownership check in the
         chain. The next caller, an administrative view or a command of a later phase, would
-        hand in a handle it read somewhere. ``is_user`` refuses the empty identity, so the
+        hand in a handle it read somewhere. ``same_principal`` refuses the empty identity, so the
         app context owns nothing here.
 
         ``False`` for a handle that does not exist, for one that was already revoked and for
@@ -1019,7 +1023,11 @@ class NextcloudOAuthProvider(
         """
         store = await self.store()
         row = await store.load_authorization(auth_id)
-        if row is None or row.revoked_at is not None or not is_user(nc_user, row.nc_user):
+        if (
+            row is None
+            or row.revoked_at is not None
+            or not same_principal(nc_user, principal_of(row))
+        ):
             return False
         families = await store.families_of_authorization(auth_id)
         await self._end_connection(store, auth_id=auth_id, family_ids=families, now=self._now())
@@ -1189,7 +1197,9 @@ class NextcloudOAuthProvider(
 
         if row is None or not password:
             return False
-        if not await loginflow.revoke_app_password(row.nc_user, password, env=self._env):
+        if not await loginflow.revoke_app_password(
+            login_name_of(row), password, target=self._nextcloud
+        ):
             # loginflow logged what happened, without any value of the exchange.
             return False
 
@@ -1227,7 +1237,7 @@ class NextcloudOAuthProvider(
                 logger.error("the app password of an abandoned sign in could not be read back")
                 password = None
             if password and await loginflow.revoke_app_password(
-                row.nc_user, password, env=self._env
+                login_name_of(row), password, target=self._nextcloud
             ):
                 swept += 1
             else:
@@ -1301,7 +1311,7 @@ class NextcloudOAuthProvider(
                 logger.error("the app password of an expired client could not be read back")
                 password = None
             if not password or not await loginflow.revoke_app_password(
-                row.nc_user, password, env=self._env
+                login_name_of(row), password, target=self._nextcloud
             ):
                 logger.warning("an expired client was removed without handing its password back")
             await store.delete_authorization(row.auth_id)

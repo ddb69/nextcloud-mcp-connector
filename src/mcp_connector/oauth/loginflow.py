@@ -8,8 +8,9 @@ which the user can see and revoke in Nextcloud under "Devices and sessions".
 The module is built like :mod:`mcp_connector.exapp.status`, the one outgoing call of the
 ExApp package, and follows the same four rules (03-PATTERNS.md):
 
-1. The target is built from the configured base URL of
-   :func:`mcp_connector.config.exapp_settings`, never from a value in an answer.
+1. The target is the :class:`~mcp_connector.nextcloud.target.NextcloudTarget` the
+   deployment injected when it built the application, never a value from an answer and
+   never a second read of the environment.
 2. The client comes from :func:`mcp_connector.nextcloud.http.shared_client`, which already
    refuses redirects and carries the timeouts of this project.
 3. One attempt per call and no retry (D-37). A failure is a return value, so a caller can
@@ -30,18 +31,18 @@ wrong exactly once (pitfall 7 of 03-RESEARCH.md):
 """
 
 import logging
-from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
 
-from .. import config
 from ..nextcloud.clients.ocs import OCS_HEADERS
 from ..nextcloud.http import shared_client
+from ..nextcloud.target import NextcloudTarget
 
 __all__ = [
+    "ACCOUNT_PATH",
     "AGENT_FALLBACK",
     "AGENT_NAME_LIMIT",
     "AGENT_PREFIX",
@@ -55,6 +56,7 @@ __all__ = [
     "AppCredentials",
     "FlowStart",
     "PollResult",
+    "account_id",
     "poll_once",
     "revoke_app_password",
     "safe_user_agent",
@@ -67,6 +69,11 @@ INIT_PATH = "/index.php/login/v2"
 
 #: The one poll address this project uses. Fixed on purpose, see the module docstring.
 POLL_PATH = "/login/v2/poll"
+
+#: The OCS route that names the account a request authenticates as. Its ``id`` is the
+#: canonical Nextcloud account id, which can differ from the login name (LDAP, alternative
+#: login names).
+ACCOUNT_PATH = "/ocs/v2.php/cloud/user"
 
 #: The OCS route that deletes the app password a request authenticates with.
 APP_PASSWORD_PATH = "/ocs/v2.php/core/apppassword"  # noqa: S105 - a route, not a password
@@ -155,15 +162,14 @@ def safe_user_agent(raw: str) -> str:
     return f"{AGENT_PREFIX}{collapsed[:AGENT_NAME_LIMIT]}"
 
 
-async def start_flow(client_name: str, *, env: Mapping[str, str] | None = None) -> FlowStart | None:
+async def start_flow(client_name: str, *, target: NextcloudTarget) -> FlowStart | None:
     """Open a sign in at Nextcloud, or say that it could not be opened.
 
     ``None`` instead of an exception, for the reason ``status.py`` gives: the caller of this
     function renders a page for a person, and a page that names the next step is a better
     answer than a stack trace turned into a 500 (D-37).
     """
-    settings = config.exapp_settings(env)
-    url = f"{settings.base_url}{INIT_PATH}"
+    url = f"{target.base_url}{INIT_PATH}"
     client = shared_client()
 
     try:
@@ -193,7 +199,7 @@ async def start_flow(client_name: str, *, env: Mapping[str, str] | None = None) 
     return FlowStart(poll_token=token, login_url=login)
 
 
-async def poll_once(poll_token: str, *, env: Mapping[str, str] | None = None) -> PollResult:
+async def poll_once(poll_token: str, *, target: NextcloudTarget) -> PollResult:
     """Ask Nextcloud once whether the sign in is finished. Exactly one request, ever.
 
     One request per call is the whole throttling of the waiting page: it refreshes every few
@@ -204,8 +210,7 @@ async def poll_once(poll_token: str, *, env: Mapping[str, str] | None = None) ->
     the difference cannot come from this answer. It comes from the deadline the caller keeps
     in its own flow record.
     """
-    settings = config.exapp_settings(env)
-    url = f"{settings.base_url}{POLL_PATH}"
+    url = f"{target.base_url}{POLL_PATH}"
     client = shared_client()
 
     try:
@@ -237,7 +242,7 @@ async def poll_once(poll_token: str, *, env: Mapping[str, str] | None = None) ->
 
 
 async def revoke_app_password(
-    login_name: str, app_password: str, *, env: Mapping[str, str] | None = None
+    login_name: str, app_password: str, *, target: NextcloudTarget
 ) -> bool:
     """Remove one app password again, authenticated with exactly that app password.
 
@@ -251,8 +256,7 @@ async def revoke_app_password(
     depend on: a revocation that hangs on a failed deletion would keep a user connected
     because a cleanup step did not work (pitfall 13, D-37).
     """
-    settings = config.exapp_settings(env)
-    url = f"{settings.base_url}{APP_PASSWORD_PATH}"
+    url = f"{target.base_url}{APP_PASSWORD_PATH}"
     client = shared_client()
 
     try:
@@ -272,6 +276,41 @@ async def revoke_app_password(
 
     logger.error("the app password deletion at %s answered %s", url, response.status_code)
     return False
+
+
+async def account_id(login_name: str, app_password: str, *, target: NextcloudTarget) -> str | None:
+    """The canonical account id behind a fresh app password, or ``None``.
+
+    One authenticated OCS request right after the poll. The answer decides who the
+    connection belongs to (the principal rule), so anything but a clean 200 with a
+    non-empty, printable ``id`` is ``None`` and the caller refuses the sign in. One attempt,
+    no retry, and nothing of the exchange is logged (the rules of this module).
+    """
+    url = f"{target.base_url}{ACCOUNT_PATH}"
+    client = shared_client()
+
+    try:
+        response = await client.get(
+            url,
+            headers=dict(OCS_HEADERS),
+            auth=httpx.BasicAuth(login_name, app_password),
+        )
+    except httpx.HTTPError:
+        logger.error("the account lookup at %s did not reach Nextcloud", url)
+        return None
+
+    if response.status_code != 200:
+        logger.error("the account lookup at %s answered %s", url, response.status_code)
+        return None
+
+    payload = _payload(response, url)
+    ocs = payload.get("ocs") if isinstance(payload, dict) else None
+    data = ocs.get("data") if isinstance(ocs, dict) else None
+    found = _text(data.get("id") if isinstance(data, dict) else None)
+    if found is None or not found.isprintable() or found != found.strip():
+        logger.error("the account lookup at %s answered without a usable account id", url)
+        return None
+    return found
 
 
 def _payload(response: httpx.Response, url: str) -> Any:

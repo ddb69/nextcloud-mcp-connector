@@ -62,7 +62,9 @@ from starlette.routing import Route
 from starlette.testclient import TestClient
 
 from mcp_connector import config
+from mcp_connector.exapp.browser_identity import AppApiBrowserIdentitySource
 from mcp_connector.exapp.middleware import RequireAppApi
+from mcp_connector.exapp.target import exapp_target
 from mcp_connector.exapp.ui import consent as ui_consent
 from mcp_connector.exapp.ui import strings
 from mcp_connector.oauth import consent, crypto, loginflow, registry
@@ -143,7 +145,11 @@ class Deployment:
         self.store = OAuthStore(tmp_path / "oauth.sqlite3", KEY)
         self.policy = registry.client_policy(self.env)
         self.provider = provider_module.NextcloudOAuthProvider(
-            env=self.env, policy=self.policy, store_provider=self._open, clock=clock
+            nextcloud=exapp_target(self.env),
+            env=self.env,
+            policy=self.policy,
+            store_provider=self._open,
+            clock=clock,
         )
         self.verifier = verifier_module.StoreTokenVerifier(
             store_provider=self._open, get_client=self.provider.get_client, env=self.env
@@ -160,7 +166,13 @@ class Deployment:
                     *provider_module.auth_routes(
                         self.env, provider=self.provider, throttle=counters
                     ),
-                    *consent.consent_routes(self.env, provider=self.provider, throttle=counters),
+                    *consent.consent_routes(
+                        self.env,
+                        provider=self.provider,
+                        browser_identity=AppApiBrowserIdentitySource(self.env),
+                        nextcloud=exapp_target(self.env),
+                        throttle=counters,
+                    ),
                     tool,
                 ]
             )
@@ -221,6 +233,14 @@ def poll_body() -> dict[str, str]:
     return {"server": BASE_URL, "loginName": LOGIN_NAME, "appPassword": APP_PASSWORD}
 
 
+ACCOUNT_URL = f"{BASE_URL}{loginflow.ACCOUNT_PATH}"
+
+
+def account_body(account: str = LOGIN_NAME) -> dict[str, object]:
+    """The answer of OCS ``cloud/user`` for the fresh app password: the canonical id."""
+    return {"ocs": {"meta": {"status": "ok", "statuscode": 200}, "data": {"id": account}}}
+
+
 def ask(deployment: Deployment, **overrides: str) -> Any:
     """One authorization request, with the Nextcloud login flow start mocked."""
     with respx.mock:
@@ -261,6 +281,7 @@ def query_of(response: Any) -> dict[str, list[str]]:
 def sign_in(deployment: Deployment, flow_id: str) -> Any:
     with respx.mock:
         respx.post(POLL_URL).mock(return_value=httpx.Response(200, json=poll_body()))
+        respx.get(ACCOUNT_URL).mock(return_value=httpx.Response(200, json=account_body()))
         return deployment.client.get(
             f"{ui_consent.CONSENT_PATH}?{ui_consent.FLOW_PARAM}={flow_id}"
             f"&{ui_consent.STEP_PARAM}={ui_consent.STEP_WAIT}"
@@ -929,6 +950,7 @@ async def _seed_connection(deployment: Deployment) -> None:
         "the-connection-of-that-consent",
         client_id=CLIENT_ID,
         nc_user=LOGIN_NAME,
+        nc_account_id=LOGIN_NAME,
         app_password=APP_PASSWORD,
         scopes=TOOL_SCOPE,
         resource=RESOURCE,

@@ -31,7 +31,10 @@ from starlette.testclient import TestClient
 
 from mcp_connector import config, entry_http
 from mcp_connector.entry_exapp import build_exapp_app
+from mcp_connector.exapp.browser_identity import AppApiBrowserIdentitySource
+from mcp_connector.exapp.target import exapp_target
 from mcp_connector.exapp.ui import strings
+from mcp_connector.nextcloud.target import NextcloudTarget
 from mcp_connector.oauth import connect, loginflow
 from mcp_connector.oauth import store as store_module
 from mcp_connector.oauth import throttle as throttle_module
@@ -49,6 +52,9 @@ ENV = {
     config.ENV_AA_VERSION: "34.0.3",
     config.ENV_NEXTCLOUD_URL: BASE_URL,
 }
+
+#: The Nextcloud the onboarding routes are built against, resolved like the ExApp does.
+TARGET = exapp_target(ENV)
 
 INIT_URL = f"{BASE_URL}{loginflow.INIT_PATH}"
 POLL_URL = f"{BASE_URL}{loginflow.POLL_PATH}"
@@ -71,6 +77,14 @@ def start_body() -> dict[str, object]:
 
 def poll_body() -> dict[str, str]:
     return {"server": BASE_URL, "loginName": LOGIN_NAME, "appPassword": APP_PASSWORD}
+
+
+ACCOUNT_URL = f"{BASE_URL}{loginflow.ACCOUNT_PATH}"
+
+
+def account_body(account: str = LOGIN_NAME) -> dict[str, object]:
+    """The answer of OCS ``cloud/user`` for the fresh app password: the canonical id."""
+    return {"ocs": {"meta": {"status": "ok", "statuscode": 200}, "data": {"id": account}}}
 
 
 class Inputs(HTMLParser):
@@ -105,7 +119,14 @@ def app_with(store: OAuthStore) -> Starlette:
     async def provider() -> OAuthStore:
         return store
 
-    return Starlette(routes=connect.connect_routes(ENV, store_provider=provider))
+    return Starlette(
+        routes=connect.connect_routes(
+            ENV,
+            browser_identity=AppApiBrowserIdentitySource(ENV),
+            nextcloud=TARGET,
+            store_provider=provider,
+        )
+    )
 
 
 def start_a_flow(client: TestClient) -> str:
@@ -329,6 +350,7 @@ def test_the_poll_carries_the_token_of_that_flow(client: TestClient) -> None:
 def test_the_credential_is_shown_once_and_never_again(client: TestClient) -> None:
     flow_id = start_a_flow(client)
     respx.post(POLL_URL).mock(return_value=httpx.Response(200, json=poll_body()))
+    respx.get(ACCOUNT_URL).mock(return_value=httpx.Response(200, json=account_body()))
 
     first = result_of(client, flow_id)
     second = result_of(client, flow_id)
@@ -345,6 +367,7 @@ def test_the_credential_is_shown_once_and_never_again(client: TestClient) -> Non
 def test_the_flow_record_is_gone_after_the_result(client: TestClient, store: OAuthStore) -> None:
     flow_id = start_a_flow(client)
     respx.post(POLL_URL).mock(return_value=httpx.Response(200, json=poll_body()))
+    respx.get(ACCOUNT_URL).mock(return_value=httpx.Response(200, json=account_body()))
 
     result_of(client, flow_id)
 
@@ -356,6 +379,7 @@ def test_the_credential_reaches_no_file_of_this_server(client: TestClient, tmp_p
     """T-03-33: the app password belongs to the user, not to this server."""
     flow_id = start_a_flow(client)
     respx.post(POLL_URL).mock(return_value=httpx.Response(200, json=poll_body()))
+    respx.get(ACCOUNT_URL).mock(return_value=httpx.Response(200, json=account_body()))
 
     assert APP_PASSWORD in result_of(client, flow_id).text
     assert APP_PASSWORD.encode() not in store_bytes(tmp_path)
@@ -365,6 +389,7 @@ def test_the_credential_reaches_no_file_of_this_server(client: TestClient, tmp_p
 def test_the_result_page_says_how_to_use_it_and_how_to_revoke_it(client: TestClient) -> None:
     flow_id = start_a_flow(client)
     respx.post(POLL_URL).mock(return_value=httpx.Response(200, json=poll_body()))
+    respx.get(ACCOUNT_URL).mock(return_value=httpx.Response(200, json=account_body()))
 
     text = result_of(client, flow_id).text
 
@@ -409,6 +434,7 @@ def test_a_paused_account_is_never_shown_its_app_password(
     flow_id = start_a_flow(client)
     pause(store)
     respx.post(POLL_URL).mock(return_value=httpx.Response(200, json=poll_body()))
+    respx.get(ACCOUNT_URL).mock(return_value=httpx.Response(200, json=account_body()))
     revoke = respx.delete(REVOKE_URL).mock(return_value=httpx.Response(200, json={}))
 
     response = result_of(client, flow_id)
@@ -429,6 +455,7 @@ def test_an_account_that_is_not_paused_still_reads_its_credential(
     """The positive control of point 2: the check refuses one case and not the route."""
     flow_id = start_a_flow(client)
     respx.post(POLL_URL).mock(return_value=httpx.Response(200, json=poll_body()))
+    respx.get(ACCOUNT_URL).mock(return_value=httpx.Response(200, json=account_body()))
     revoke = respx.delete(REVOKE_URL).mock(return_value=httpx.Response(200, json={}))
 
     response = result_of(client, flow_id)
@@ -446,6 +473,7 @@ def test_a_switch_that_cannot_be_read_shows_no_credential(
     """Fail closed (D-37): an unreadable switch is a page, never a rendered credential."""
     flow_id = start_a_flow(client)
     respx.post(POLL_URL).mock(return_value=httpx.Response(200, json=poll_body()))
+    respx.get(ACCOUNT_URL).mock(return_value=httpx.Response(200, json=account_body()))
     revoke = respx.delete(REVOKE_URL).mock(return_value=httpx.Response(200, json={}))
     break_switch(store)
 
@@ -465,6 +493,7 @@ def test_no_refusal_of_a_paused_account_writes_a_value_into_the_log(
     flow_id = start_a_flow(client)
     pause(store)
     respx.post(POLL_URL).mock(return_value=httpx.Response(200, json=poll_body()))
+    respx.get(ACCOUNT_URL).mock(return_value=httpx.Response(200, json=account_body()))
     respx.delete(REVOKE_URL).mock(return_value=httpx.Response(200, json={}))
 
     with caplog.at_level(logging.DEBUG, logger="mcp_connector"):
@@ -515,7 +544,16 @@ def test_a_deployment_without_a_provider_opens_one_store_and_sweeps_it_once(
     monkeypatch.setattr(OAuthStore, "purge_expired", counted)
     monkeypatch.setattr(store_module.crypto, "data_key", key)
     env = {**ENV, config.ENV_APP_PERSISTENT_STORAGE: str(tmp_path)}
-    client = TestClient(Starlette(routes=connect.connect_routes(env)))
+    client = TestClient(
+        Starlette(
+            routes=connect.connect_routes(
+                env,
+                browser_identity=AppApiBrowserIdentitySource(env),
+                nextcloud=TARGET,
+                store_provider=store_module.store_opener(env),
+            )
+        )
+    )
 
     first = start_a_flow(client)
     second = start_a_flow(client)
@@ -525,15 +563,18 @@ def test_a_deployment_without_a_provider_opens_one_store_and_sweeps_it_once(
     assert swept[0] == str(tmp_path / store_module.STORE_FILENAME)
 
 
-def test_the_store_of_this_route_is_the_shared_opener() -> None:
+def test_the_store_of_this_route_is_the_opener_it_was_given() -> None:
     """The other half of IN-02: one implementation, not two that look alike.
 
     A second copy of the double checked locking, the key first rule and the sweep on first
     open is not a small duplication: it is a second place to fix whenever the first one
-    changes, in a branch no test of this file walks.
+    changes, in a branch no test of this file walks. Since the standalone OAuth preparation
+    the route does not even choose the opener: the deployment passes it in, so no default
+    can pick the ExApp directory and key for a deployment that never chose them.
     """
     source = Path(connect.__file__).read_text(encoding="utf-8")
-    assert "store_opener(" in source, "the opener is called here"
+    assert "store_opener(" not in source, "the deployment builds the opener, not this route"
+    assert "OAuthStore(" not in source, "and no store is constructed here either"
     # The calls, not the prose: the docstring names all three, which is the point of it.
     assert "purge_expired()" not in source, "the sweep is the opener's business"
     assert "crypto.data_key(" not in source, "and so is the key"
@@ -578,7 +619,15 @@ def test_a_flood_of_successful_starts_ends_in_429(store: OAuthStore) -> None:
         return store
 
     client = TestClient(
-        Starlette(routes=connect.connect_routes(ENV, store_provider=provide, throttle=counters))
+        Starlette(
+            routes=connect.connect_routes(
+                ENV,
+                browser_identity=AppApiBrowserIdentitySource(ENV),
+                nextcloud=TARGET,
+                store_provider=provide,
+                throttle=counters,
+            )
+        )
     )
     init = respx.post(INIT_URL).mock(return_value=httpx.Response(200, json=start_body()))
 
@@ -606,7 +655,15 @@ def test_the_throttled_start_does_not_close_the_waiting_screen(store: OAuthStore
         return store
 
     client = TestClient(
-        Starlette(routes=connect.connect_routes(ENV, store_provider=provide, throttle=counters))
+        Starlette(
+            routes=connect.connect_routes(
+                ENV,
+                browser_identity=AppApiBrowserIdentitySource(ENV),
+                nextcloud=TARGET,
+                store_provider=provide,
+                throttle=counters,
+            )
+        )
     )
     respx.post(INIT_URL).mock(return_value=httpx.Response(200, json=start_body()))
     respx.post(POLL_URL).mock(return_value=httpx.Response(404))
@@ -641,6 +698,7 @@ def test_the_relay_attack_reads_no_app_password(
     """
     flow_id = start_a_flow(client)
     respx.post(POLL_URL).mock(return_value=httpx.Response(200, json=poll_body()))
+    respx.get(ACCOUNT_URL).mock(return_value=httpx.Response(200, json=account_body()))
     revoke = respx.delete(f"{BASE_URL}{loginflow.APP_PASSWORD_PATH}").mock(
         return_value=httpx.Response(200, json={})
     )
@@ -658,6 +716,7 @@ def test_a_forged_identity_header_reads_no_app_password(client: TestClient) -> N
     """The header is signed with APP_SECRET, which the caller does not have (T-02-02)."""
     flow_id = start_a_flow(client)
     respx.post(POLL_URL).mock(return_value=httpx.Response(200, json=poll_body()))
+    respx.get(ACCOUNT_URL).mock(return_value=httpx.Response(200, json=account_body()))
     respx.delete(f"{BASE_URL}{loginflow.APP_PASSWORD_PATH}").mock(
         return_value=httpx.Response(200, json={})
     )
@@ -684,6 +743,7 @@ def test_a_refused_result_ends_the_flow_so_the_poll_is_not_repeated(
     leave a flow behind that can never finish, and one more page to try it on."""
     flow_id = start_a_flow(client)
     respx.post(POLL_URL).mock(return_value=httpx.Response(200, json=poll_body()))
+    respx.get(ACCOUNT_URL).mock(return_value=httpx.Response(200, json=account_body()))
     respx.delete(f"{BASE_URL}{loginflow.APP_PASSWORD_PATH}").mock(
         return_value=httpx.Response(200, json={})
     )
@@ -700,6 +760,7 @@ def test_no_secret_of_the_result_reaches_the_log(
     """T-03-36: the one page that carries a credential must not repeat it in a record."""
     flow_id = start_a_flow(client)
     respx.post(POLL_URL).mock(return_value=httpx.Response(200, json=poll_body()))
+    respx.get(ACCOUNT_URL).mock(return_value=httpx.Response(200, json=account_body()))
 
     with caplog.at_level(logging.DEBUG, logger="mcp_connector"):
         result_of(client, flow_id)
@@ -871,7 +932,16 @@ def test_the_default_store_is_opened_once_and_purged_at_the_first_use(
 
     monkeypatch.setattr(store_module.crypto, "data_key", fake_key)
     env = ENV | {config.ENV_APP_PERSISTENT_STORAGE: str(tmp_path)}
-    client = TestClient(Starlette(routes=connect.connect_routes(env)))
+    client = TestClient(
+        Starlette(
+            routes=connect.connect_routes(
+                env,
+                browser_identity=AppApiBrowserIdentitySource(env),
+                nextcloud=TARGET,
+                store_provider=store_module.store_opener(env),
+            )
+        )
+    )
 
     first = client.get(wait_url("unknown"))
     second = client.get(wait_url("unknown"))
@@ -885,7 +955,14 @@ def test_the_default_store_is_opened_once_and_purged_at_the_first_use(
 def test_a_store_that_cannot_be_opened_is_the_generic_page() -> None:
     """Fail closed (D-37): no deploy environment, no store, and a named page, not a 500."""
     client = TestClient(
-        Starlette(routes=connect.connect_routes({config.ENV_PUBLIC_URL: PUBLIC_URL}))
+        Starlette(
+            routes=connect.connect_routes(
+                {config.ENV_PUBLIC_URL: PUBLIC_URL},
+                browser_identity=AppApiBrowserIdentitySource({config.ENV_PUBLIC_URL: PUBLIC_URL}),
+                nextcloud=TARGET,
+                store_provider=store_module.store_opener({config.ENV_PUBLIC_URL: PUBLIC_URL}),
+            )
+        )
     )
 
     response = client.get(wait_url("anything"))
@@ -910,10 +987,135 @@ def test_the_onboarding_stores_no_credential_anywhere_in_its_source() -> None:
 
 
 def test_the_factory_returns_the_three_declared_routes() -> None:
-    routes = connect.connect_routes(ENV)
+    routes = connect.connect_routes(
+        ENV,
+        browser_identity=AppApiBrowserIdentitySource(ENV),
+        nextcloud=TARGET,
+        store_provider=store_module.store_opener(ENV),
+    )
 
     assert [getattr(route, "path", "") for route in routes] == [
         connect.CONNECT_PATH,
         connect.CONNECT_PATH,
         connect.WAIT_PATH,
     ]
+
+
+@respx.mock
+def test_the_onboarding_opens_its_flow_at_the_injected_target(store: OAuthStore) -> None:
+    """Standalone OAuth, slice 2: the environment still names BASE_URL, the routes do not."""
+    injected = "https://nc.injected.example"
+
+    async def provider() -> OAuthStore:
+        return store
+
+    client = TestClient(
+        Starlette(
+            routes=connect.connect_routes(
+                ENV,
+                browser_identity=AppApiBrowserIdentitySource(ENV),
+                nextcloud=NextcloudTarget.from_url(injected),
+                store_provider=provider,
+            )
+        )
+    )
+    environment_init = respx.post(INIT_URL).mock(
+        return_value=httpx.Response(200, json=start_body())
+    )
+    injected_init = respx.post(f"{injected}{loginflow.INIT_PATH}").mock(
+        return_value=httpx.Response(200, json=start_body())
+    )
+
+    response = client.post(connect.CONNECT_PATH, data={connect.ACTION_FIELD: connect.ACTION_START})
+
+    assert response.status_code == 200, response.text
+    assert (injected_init.call_count, environment_init.call_count) == (1, 0)
+
+
+@respx.mock
+def test_a_failing_identity_source_hands_nothing_over_and_takes_the_password_back(
+    store: OAuthStore,
+) -> None:
+    """The onboarding asks the injected source like the consent decision does (CR-01)."""
+
+    class Broken:
+        async def identifies(
+            self, request: object, expected_account_id: str, *, flow_id: str | None = None
+        ) -> bool:
+            raise RuntimeError("identity backend down")
+
+        async def pending_step(
+            self, request: object, *, flow_id: str, expected_account_id: str
+        ) -> None:
+            return None
+
+    async def provider() -> OAuthStore:
+        return store
+
+    client = TestClient(
+        Starlette(
+            routes=connect.connect_routes(
+                ENV, nextcloud=TARGET, store_provider=provider, browser_identity=Broken()
+            )
+        )
+    )
+    flow_id = start_a_flow(client)
+    respx.post(POLL_URL).mock(return_value=httpx.Response(200, json=poll_body()))
+    respx.get(ACCOUNT_URL).mock(return_value=httpx.Response(200, json=account_body()))
+    revoke = respx.delete(REVOKE_URL).mock(return_value=httpx.Response(200, json={}))
+
+    response = result_of(client, flow_id)
+
+    assert APP_PASSWORD not in response.text
+    assert revoke.call_count == 1
+    assert flow_ids(store) == []
+
+
+def test_the_onboarding_no_longer_compares_appapi_headers_itself() -> None:
+    source = Path(connect.__file__).read_text(encoding="utf-8")
+    assert "appapi_user" not in source
+    assert "is_user(" not in source
+
+
+# --- the canonical account id (principal rule) -------------------------------------------
+
+
+@respx.mock
+def test_the_result_is_handed_to_the_account_id_and_not_the_login_name(
+    client: TestClient, store: OAuthStore
+) -> None:
+    flow_id = start_a_flow(client)
+    respx.post(POLL_URL).mock(return_value=httpx.Response(200, json=poll_body()))
+    respx.get(ACCOUNT_URL).mock(return_value=httpx.Response(200, json=account_body("a1b2c3")))
+    revoke = respx.delete(REVOKE_URL).mock(return_value=httpx.Response(200, json={}))
+
+    refused = result_of(client, flow_id, user=LOGIN_NAME)
+
+    assert APP_PASSWORD not in refused.text
+    assert revoke.call_count == 1
+
+
+@respx.mock
+def test_the_account_id_is_what_the_result_page_trusts(
+    client: TestClient, store: OAuthStore
+) -> None:
+    flow_id = start_a_flow(client)
+    respx.post(POLL_URL).mock(return_value=httpx.Response(200, json=poll_body()))
+    respx.get(ACCOUNT_URL).mock(return_value=httpx.Response(200, json=account_body("a1b2c3")))
+
+    assert APP_PASSWORD in result_of(client, flow_id, user="a1b2c3").text
+
+
+@respx.mock
+def test_an_unresolved_account_hands_nothing_over(client: TestClient, store: OAuthStore) -> None:
+    flow_id = start_a_flow(client)
+    respx.post(POLL_URL).mock(return_value=httpx.Response(200, json=poll_body()))
+    respx.get(ACCOUNT_URL).mock(return_value=httpx.Response(401, json={}))
+    revoke = respx.delete(REVOKE_URL).mock(return_value=httpx.Response(200, json={}))
+
+    response = result_of(client, flow_id)
+
+    assert APP_PASSWORD not in response.text
+    assert strings.ERROR_GENERIC_TITLE in response.text
+    assert revoke.call_count == 1
+    assert flow_ids(store) == []

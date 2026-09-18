@@ -25,6 +25,8 @@ hardening of ``entry_http`` (allowed hosts, DNS rebinding protection).
 
 import logging
 import os
+import secrets
+import stat
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -65,7 +67,24 @@ ENV_HP_SHARED_KEY = "HP_SHARED_KEY"  # the env var name, not a secret
 ENV_HP_EXAPP_SOCK = "HP_EXAPP_SOCK"
 ENV_NEXTCLOUD_URL = "NEXTCLOUD_URL"
 
-Mode = Literal["stdio", "exapp", "http_passthrough", "http_static_bearer"]
+# Standalone OAuth deployment (``nc-mcp-oauth``): the MCP authorization server of this app
+# without AppAPI, with the browser identity of an OIDC single sign-on. Nextcloud is
+# ``NC_MCP_URL`` and the public address is ``NC_MCP_PUBLIC_URL``, as in the other modes.
+ENV_AUTH_MODE = "NC_MCP_AUTH_MODE"
+AUTH_MODE_OAUTH = "oauth"
+ENV_OAUTH_STORAGE_DIR = "NC_MCP_OAUTH_STORAGE_DIR"
+ENV_OAUTH_DATA_KEY_FILE = "NC_MCP_OAUTH_DATA_KEY_FILE"
+ENV_OIDC_ISSUER = "NC_MCP_OIDC_ISSUER"
+ENV_OIDC_CLIENT_ID = "NC_MCP_OIDC_CLIENT_ID"
+ENV_OIDC_CLIENT_SECRET_FILE = "NC_MCP_OIDC_CLIENT_SECRET_FILE"  # noqa: S105 - a variable name
+ENV_OIDC_PROVIDER_ID = "NC_MCP_OIDC_PROVIDER_ID"
+ENV_OIDC_MAPPING = "NC_MCP_OIDC_MAPPING"
+ENV_OIDC_ALGORITHMS = "NC_MCP_OIDC_ALGORITHMS"
+ENV_TRUST_FORWARDED_FOR = "NC_MCP_TRUST_FORWARDED_FOR"
+ENV_BIND_HOST = "NC_MCP_BIND_HOST"
+ENV_BIND_PORT = "NC_MCP_BIND_PORT"
+
+Mode = Literal["stdio", "exapp", "oauth", "http_passthrough", "http_static_bearer"]
 
 #: Used as issuer and resource server URL in the static bearer mode. It is only ever a
 #: self-reference for the RFC 9728 discovery document, never a place we send secrets to.
@@ -165,7 +184,13 @@ def normalize_base_url(raw: str) -> str:
     if not candidate:
         raise ToolError(message=f"{ENV_URL} is empty.", hint=_URL_HINT)
 
-    parts = urlsplit(candidate)
+    try:
+        parts = urlsplit(candidate)
+        # Read once so an out of range or non numeric port is refused here and not on the
+        # first request that builds a URL from this value.
+        _ = parts.port
+    except ValueError:
+        raise ToolError(message=f"{ENV_URL} is not a valid URL.", hint=_URL_HINT) from None
     if parts.scheme not in ("http", "https"):
         raise ToolError(
             message=f"{ENV_URL} must start with http:// or https:// (got {candidate!r}).",
@@ -222,9 +247,23 @@ def select_mode(
     # instead of resolving it silently per request (D-27, no silent fallbacks).
     if exapp_configured(source):
         return "exapp"
+    # The standalone OAuth entry point refuses to start next to a static bearer or an
+    # ExApp environment, so this branch never has to choose between them at runtime.
+    if oauth_configured(source):
+        return "oauth"
     if static_bearer(source):
         return "http_static_bearer"
     return "http_passthrough"
+
+
+def oauth_configured(env: Mapping[str, str] | None = None) -> bool:
+    """Whether this process is the standalone OAuth deployment (``NC_MCP_AUTH_MODE=oauth``).
+
+    An explicit switch and not a guess from the OIDC variables: the credential source of
+    every tool call depends on it, so a half-configured environment must not select it.
+    """
+    source = os.environ if env is None else env
+    return (source.get(ENV_AUTH_MODE) or "").strip().lower() == AUTH_MODE_OAUTH
 
 
 def static_bearer(env: Mapping[str, str] | None = None) -> str | None:
@@ -270,6 +309,50 @@ def public_url(env: Mapping[str, str] | None = None) -> str:
     return (source.get(ENV_PUBLIC_URL) or "").strip().rstrip("/") or DEFAULT_PUBLIC_URL
 
 
+def trust_forwarded_for(env: Mapping[str, str] | None = None) -> bool:
+    """Whether the throttle may take the client address from ``X-Forwarded-For``.
+
+    Behind HaRP the peer of every request is the proxy, so the forwarded address is the
+    only value that tells two callers apart, and the ExApp keeps reading it. A standalone
+    deployment may be reachable without a proxy in front, and then the header is whatever
+    the caller wrote: reading it would let one source spend the limit of every other. So
+    the default flips with the mode, and ``NC_MCP_TRUST_FORWARDED_FOR`` decides it for a
+    deployment that does run behind a proxy (or for an ExApp that must not).
+    """
+    source = os.environ if env is None else env
+    value = (source.get(ENV_TRUST_FORWARDED_FOR) or "").strip().lower()
+    if not value:
+        return not oauth_configured(source)
+    if value in _TRUE_VALUES:
+        return True
+    if value in _FALSE_VALUES:
+        return False
+    logger.warning(
+        "%s is %r, which is neither true nor false. The forwarded address is %s.",
+        ENV_TRUST_FORWARDED_FOR,
+        value,
+        "read" if not oauth_configured(source) else "ignored",
+    )
+    return not oauth_configured(source)
+
+
+def sign_in_host(env: Mapping[str, str] | None = None) -> str:
+    """The host where a user signs in to Nextcloud, as the browser pages name it.
+
+    In the ExApp the app lives under the Nextcloud domain, so that is the public address of
+    this app. The standalone OAuth deployment runs on a host of its own, and there the pages
+    have to name the Nextcloud (``NC_MCP_URL``): the sign in, and the password prompt the
+    pages warn about, happen there and not here. Never read from a request (T-03-02).
+    """
+    source = os.environ if env is None else env
+    configured = public_url(source)
+    if oauth_configured(source):
+        nextcloud = (source.get(ENV_URL) or "").strip()
+        if nextcloud:
+            configured = nextcloud
+    return urlsplit(configured).netloc or configured
+
+
 def persistent_storage(env: Mapping[str, str] | None = None) -> Path:
     """Return the directory the OAuth store writes into, or say what is missing.
 
@@ -299,20 +382,46 @@ def persistent_storage(env: Mapping[str, str] | None = None) -> Path:
         )
         return fallback
 
-    if not raw:
-        raise ToolError(message=f"{ENV_APP_PERSISTENT_STORAGE} is not set.", hint=_STORAGE_HINT)
+    return _writable_directory(raw, variable=ENV_APP_PERSISTENT_STORAGE, hint=_STORAGE_HINT)
 
-    path = Path(raw)
+
+def storage_directory(raw: str, *, variable: str, hint: str) -> Path:
+    """Validate a configured store directory without any fallback.
+
+    The strict half of :func:`persistent_storage`, usable by a deployment that is not an
+    ExApp: an empty value, a path that is not a directory and a directory this process
+    cannot write into are named errors. Nothing is created, and no development directory
+    is ever chosen instead, because a store that lands in the wrong place answers correctly
+    until the next restart and then has lost every authorization (pitfall 12, T-03-15).
+    ``variable`` and ``hint`` name the setting in the deployment's own words.
+
+    On top of that the directory must not be writable by its group or by others. Whoever can
+    write there can replace the store file between a check and the next open, or plant a
+    link in its place, so the file rules of the store only hold in a directory that belongs
+    to the connector. The ExApp volume keeps its current rules (:func:`persistent_storage`).
+    """
+    path = _writable_directory(raw, variable=variable, hint=hint)
+    # POSIX only: Windows models a read-only flag in these bits and nothing else, so there
+    # the ACL of the directory is the boundary and the documentation says so.
+    if os.name != "nt" and path.stat().st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        raise ToolError(
+            message=f"The directory in {variable} is writable by its group or by others.",
+            hint=hint,
+        )
+    return path
+
+
+def _writable_directory(raw: str, *, variable: str, hint: str) -> Path:
+    """An existing directory this process can write into, or a named error."""
+    candidate = (raw or "").strip()
+    if not candidate:
+        raise ToolError(message=f"{variable} is not set.", hint=hint)
+
+    path = Path(candidate)
     if not path.is_dir():
-        raise ToolError(
-            message=f"{ENV_APP_PERSISTENT_STORAGE} does not point at a directory.",
-            hint=_STORAGE_HINT,
-        )
+        raise ToolError(message=f"{variable} does not point at a directory.", hint=hint)
     if not _probe_writable(path):
-        raise ToolError(
-            message=f"The directory in {ENV_APP_PERSISTENT_STORAGE} is not writable.",
-            hint=_STORAGE_HINT,
-        )
+        raise ToolError(message=f"The directory in {variable} is not writable.", hint=hint)
     return path
 
 
@@ -322,10 +431,21 @@ def _probe_writable(path: Path) -> bool:
     ``os.access`` reports the permission bits, which say nothing about a read only bind
     mount, a full filesystem or a Windows ACL. The store has to write, so the check
     writes.
+
+    The probe is created exclusively under a random name and never follows a link. The
+    name used to be predictable (``.write-probe-<pid>``) and was opened with an ordinary
+    write, so a link planted there beforehand made the check truncate whatever file it
+    pointed at. ``O_EXCL`` refuses any existing entry, a link included, and ``O_NOFOLLOW``
+    says the same where the platform offers it. Only the entry this call created is removed.
     """
-    probe = path / f".write-probe-{os.getpid()}"
+    probe = path / f".write-probe-{os.getpid()}-{secrets.token_hex(8)}"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
     try:
-        probe.write_bytes(b"")
+        descriptor = os.open(probe, flags, 0o600)
+    except OSError:
+        return False
+    os.close(descriptor)
+    try:
         probe.unlink()
     except OSError:
         return False
