@@ -72,11 +72,12 @@ Together with [Findling](https://apps.nextcloud.com/apps/findling), this connect
 
 ### Enterprise
 
-The hash-chained audit log is built in and off by default; next on this road: group policies and identity provider sign-in.
+The hash-chained audit log is built in and off by default. Sign-in through your own identity provider arrived with 0.2.0, in the deployment without AppAPI; group policies are next on this road.
 
 Requirements:
 
 - Nextcloud 32 to 35 with the AppAPI app; runs as an External App
+- Or without AppAPI, since 0.2.0: run it beside your Nextcloud, with the consent confirmed by your OIDC sign-in; guide: docs/standalone-oauth.md in the source code
 - n8n speaks MCP natively since 1.119.0; guide: docs/n8n-setup.md in the source code]]></description>
 	<description lang="de"><![CDATA[Was der MCP Connector kann:
 
@@ -88,11 +89,12 @@ Zusammen mit [Findling](https://apps.nextcloud.com/apps/findling) ergibt dieser 
 
 ### Enterprise
 
-Das hash-verkettete Audit-Log ist eingebaut und ab Werk aus; als Nächstes auf dieser Schiene: Gruppen-Policies und Anmeldung über den Identity-Provider.
+Das hash-verkettete Audit-Log ist eingebaut und ab Werk aus. Die Anmeldung über den eigenen Identity-Provider gibt es seit 0.2.0, im Betrieb ohne AppAPI; als Nächstes auf dieser Schiene: Gruppen-Policies.
 
 Anforderungen:
 
 - Nextcloud 32 bis 35 mit der App AppAPI; läuft als External App
+- Oder ohne AppAPI, seit 0.2.0: neben Ihrer Nextcloud betrieben, die Zustimmung bestätigt Ihre OIDC-Anmeldung; Anleitung: docs/standalone-oauth.md im Quellcode
 - n8n spricht MCP ab 1.119.0 direkt; Anleitung: docs/n8n-setup.md im Quellcode]]></description>
 	<description lang="fr"><![CDATA[Ce que sait faire le MCP Connector :
 
@@ -104,13 +106,14 @@ Avec [Findling](https://apps.nextcloud.com/apps/findling), ce connecteur forme l
 
 ### Enterprise
 
-Le journal d'audit chaîné par hachage est intégré et désactivé par défaut ; ensuite sur cette route : politiques de groupe et connexion via le fournisseur d'identité.
+Le journal d'audit chaîné par hachage est intégré et désactivé par défaut. La connexion via votre propre fournisseur d'identité existe depuis la 0.2.0, dans le déploiement sans AppAPI ; ensuite sur cette route : les politiques de groupe.
 
 Prérequis :
 
 - Nextcloud 32 à 35 avec l'application AppAPI ; fonctionne comme External App
+- Ou sans AppAPI, depuis la 0.2.0 : exploité à côté de votre Nextcloud, le consentement étant confirmé par votre connexion OIDC ; guide : docs/standalone-oauth.md dans le code source
 - n8n parle MCP nativement depuis la 1.119.0 ; guide : docs/n8n-setup.md dans le code source]]></description>
-	<version>0.2.0</version>
+	<version>0.2.1</version>
 	<licence>agpl</licence>
 	<author mail="admin@infranode.dev">street1983nk</author>
 	<namespace>McpConnector</namespace>
@@ -190,7 +193,7 @@ Prérequis :
 			-->
 			<registry>ghcr.io</registry>
 			<image>street1983nk/mcp_connector</image>
-			<image-tag>0.2.0</image-tag>
+			<image-tag>0.2.1</image-tag>
 		</docker-install>
 		<!--
 		  - Exactly thirteen routes, and they are the whole external attack surface of this app.

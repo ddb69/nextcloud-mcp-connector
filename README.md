@@ -112,6 +112,12 @@ On 34.0.3 the apps management interface does this for you, on earlier versions o
 reliable path. The walkthrough with the exact commands and the pitfalls that actually happen:
 [docs/exapp-install.md](docs/exapp-install.md).
 
+Since 0.2.0 the server also runs without AppAPI. `nc-mcp-oauth` serves the same endpoint,
+authorization server and consent screen for a Nextcloud it reaches over HTTPS, and because
+no AppAPI header names the account behind a browser there, the consent decision is confirmed
+by the OIDC single sign-on Nextcloud already trusts. Setup, secrets and operation:
+[docs/standalone-oauth.md](docs/standalone-oauth.md).
+
 [![MCP Connector in the Nextcloud App Store](docs/screenshots/app-store.png)](https://apps.nextcloud.com/apps/mcp_connector)
 
 ## Clients
@@ -153,8 +159,10 @@ switches it on in the admin settings of this app, and the entries are read with
 `occ mcp_connector:audit:verify` walks the chains and names the first place one of them is
 broken.
 
-Planned, but not available yet, are group policies and sign in through the identity provider
-your organisation already runs.
+Sign in through the identity provider your organisation already runs arrived with 0.2.0, in
+the deployment without AppAPI: the consent decision is confirmed by the OIDC single sign-on
+Nextcloud already trusts through `user_oidc`. Still planned on that road are group
+policies.
 
 Request a quote: admin@infranode.dev
 

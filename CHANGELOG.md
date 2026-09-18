@@ -13,6 +13,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Nothing here is released.
 
+## [0.2.1] - 2026-09-18
+
+Text only, and it needs its own release because the store reads the manifest at upload
+time: the description of 0.2.0 still said that signing in through your own identity
+provider was planned, one release after it shipped.
+
+### Fixed
+
+- The store description and all three readme files said group policies and identity
+  provider sign-in were planned and not available yet. The sign-in arrived with 0.2.0, in
+  the deployment without AppAPI, where the consent decision is confirmed by the OIDC single
+  sign-on Nextcloud already trusts. Group policies are still planned, and now say so alone.
+  The installation sections name the deployment without AppAPI as the second way to run the
+  server, with a link to its setup. Nothing about the app itself changes with this release.
+
 ## [0.2.0] - 2026-09-18
 
 Two reasons for a minor release rather than a patch. Accounts whose login name differs
@@ -720,6 +735,7 @@ First release, submitted to the Nextcloud App Store.
   never sees more than that user sees in the web interface.
 - A privacy and data flow description, see [docs/privacy.md](docs/privacy.md).
 
+[0.2.1]: https://github.com/street1983nk/nextcloud-mcp-connector/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/street1983nk/nextcloud-mcp-connector/compare/v0.1.15...v0.2.0
 [0.1.15]: https://github.com/street1983nk/nextcloud-mcp-connector/compare/v0.1.14...v0.1.15
 [0.1.14]: https://github.com/street1983nk/nextcloud-mcp-connector/compare/v0.1.13...v0.1.14

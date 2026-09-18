@@ -127,6 +127,13 @@ Nextcloud 32 à 35. Sur 34.0.3 l'interface de gestion des applications s'en char
 versions antérieures occ est le chemin fiable. Le déroulé complet avec les commandes exactes
 et les pièges qui surviennent vraiment : [docs/exapp-install.md](docs/exapp-install.md).
 
+Depuis la 0.2.0, le serveur fonctionne aussi sans AppAPI. `nc-mcp-oauth` sert le même point
+de terminaison, le même serveur d'autorisation et le même écran de consentement pour une
+Nextcloud qu'il atteint en HTTPS. Comme aucun en-tête AppAPI n'y nomme le compte derrière le
+navigateur, la décision de consentement est confirmée par l'authentification unique OIDC à
+laquelle Nextcloud fait déjà confiance. Installation, secrets et exploitation :
+[docs/standalone-oauth.md](docs/standalone-oauth.md).
+
 [![MCP Connector dans l'App Store de Nextcloud](docs/screenshots/app-store.png)](https://apps.nextcloud.com/apps/mcp_connector)
 
 ## Clients
@@ -171,8 +178,10 @@ d'administration de cette application, et il se lit avec `occ mcp_connector:audi
 Chaque entrée est chaînée par empreinte à la précédente, et `occ mcp_connector:audit:verify`
 parcourt les chaînes et indique le premier endroit où l'une d'elles est rompue.
 
-Prévus, mais pas encore disponibles : les politiques de groupe et l'authentification via le
-fournisseur d'identité que votre organisation exploite déjà.
+L'authentification via le fournisseur d'identité que votre organisation exploite déjà est
+arrivée avec la 0.2.0, dans le déploiement sans AppAPI : la décision de consentement est
+confirmée par l'authentification unique OIDC à laquelle Nextcloud fait déjà confiance via
+`user_oidc`. Les politiques de groupe restent prévues.
 
 Demande de devis : admin@infranode.dev
 
