@@ -1,4 +1,4 @@
-"""Deck REST v1.0 client: boards, stacks including their cards, and one create path.
+"""Deck REST v1.0 client: boards, stacks, cards and opt-in management paths.
 
 The API lives at ``/index.php/apps/deck/api/v1.0`` and it is the strictest of the JSON
 APIs this project speaks. Two headers are mandatory on **every** request, a plain GET
@@ -173,6 +173,151 @@ async def create_card(
         auth=creds.auth(),
     )
     return _as_dict(ocs.parse_app_json(response, what="the new card"), what="a card")
+
+
+async def update_card(
+    client: httpx.AsyncClient,
+    creds: Credentials,
+    board_id: str | int,
+    stack_id: str | int,
+    card_id: str | int,
+    *,
+    title: str | None = None,
+    description: str | None = None,
+    duedate: str | None = None,
+) -> dict[str, Any]:
+    """Update selected card fields while preserving the complete Deck update contract."""
+    board, stack, card = _card_path(board_id, stack_id, card_id)
+    current = await get_card(client, creds, board, stack, card)
+    body = {
+        "title": check_title(title if title is not None else str(current.get("title") or "")),
+        "type": current.get("type") or CARD_TYPE,
+        "owner": current.get("owner") or creds.user,
+        "description": description if description is not None else current.get("description") or "",
+        "order": current.get("order", DEFAULT_CARD_ORDER),
+        "duedate": check_duedate(duedate)
+        if duedate
+        else (None if duedate == "" else current.get("duedate")),
+    }
+    response = await client.put(
+        api_url(creds, f"/boards/{board}/stacks/{stack}/cards/{card}"),
+        json=body,
+        headers=dict(DECK_HEADERS),
+        auth=creds.auth(),
+    )
+    return _as_dict(ocs.parse_app_json(response, what=f"the updated card {card}"), what="a card")
+
+
+async def move_card(
+    client: httpx.AsyncClient,
+    creds: Credentials,
+    board_id: str | int,
+    stack_id: str | int,
+    card_id: str | int,
+    *,
+    target_stack_id: str | int,
+    order: int = DEFAULT_CARD_ORDER,
+) -> dict[str, Any]:
+    """Move a card through Deck's reorder endpoint."""
+    board, stack, card = _card_path(board_id, stack_id, card_id)
+    target = _path_id(target_stack_id, "target stack id")
+    response = await client.put(
+        api_url(creds, f"/boards/{board}/stacks/{stack}/cards/{card}/reorder"),
+        json={"stackId": int(target), "order": order},
+        headers=dict(DECK_HEADERS),
+        auth=creds.auth(),
+    )
+    return _as_dict(ocs.parse_app_json(response, what=f"the moved card {card}"), what="a card")
+
+
+async def create_stack(
+    client: httpx.AsyncClient,
+    creds: Credentials,
+    board_id: str | int,
+    *,
+    title: str,
+    order: int = DEFAULT_CARD_ORDER,
+) -> dict[str, Any]:
+    board = _path_id(board_id, "board id")
+    response = await client.post(
+        api_url(creds, f"/boards/{board}/stacks"),
+        json={"title": check_title(title), "order": order},
+        headers=dict(DECK_HEADERS),
+        auth=creds.auth(),
+    )
+    return _as_dict(ocs.parse_app_json(response, what="the new stack"), what="a stack")
+
+
+async def create_label(
+    client: httpx.AsyncClient,
+    creds: Credentials,
+    board_id: str | int,
+    *,
+    title: str,
+    color: str,
+) -> dict[str, Any]:
+    board = _path_id(board_id, "board id")
+    normalized = color.strip().lstrip("#")
+    if len(normalized) != 6 or any(char not in "0123456789abcdefABCDEF" for char in normalized):
+        raise ToolError(
+            message=f"{color!r} is not a six-digit hex color.", hint="Use a color like 0082C9."
+        )
+    response = await client.post(
+        api_url(creds, f"/boards/{board}/labels"),
+        json={"title": check_title(title), "color": normalized.upper()},
+        headers=dict(DECK_HEADERS),
+        auth=creds.auth(),
+    )
+    return _as_dict(ocs.parse_app_json(response, what="the new label"), what="a label")
+
+
+async def set_card_label(
+    client: httpx.AsyncClient,
+    creds: Credentials,
+    board_id: str | int,
+    stack_id: str | int,
+    card_id: str | int,
+    *,
+    label_id: str | int,
+    assigned: bool,
+) -> dict[str, Any]:
+    board, stack, card = _card_path(board_id, stack_id, card_id)
+    label = _path_id(label_id, "label id")
+    operation = "assignLabel" if assigned else "removeLabel"
+    response = await client.put(
+        api_url(creds, f"/boards/{board}/stacks/{stack}/cards/{card}/{operation}"),
+        json={"labelId": int(label)},
+        headers=dict(DECK_HEADERS),
+        auth=creds.auth(),
+    )
+    return _as_dict(ocs.parse_app_json(response, what=f"the relabelled card {card}"), what="a card")
+
+
+async def delete_card(
+    client: httpx.AsyncClient,
+    creds: Credentials,
+    board_id: str | int,
+    stack_id: str | int,
+    card_id: str | int,
+) -> dict[str, Any]:
+    board, stack, card = _card_path(board_id, stack_id, card_id)
+    response = await client.request(
+        "DELETE",
+        api_url(creds, f"/boards/{board}/stacks/{stack}/cards/{card}"),
+        headers=dict(DECK_HEADERS),
+        auth=creds.auth(),
+    )
+    return _as_dict(ocs.parse_app_json(response, what=f"the deleted card {card}"), what="a card")
+
+
+def _card_path(
+    board_id: str | int, stack_id: str | int, card_id: str | int
+) -> tuple[str, str, str]:
+    return (
+        _path_id(board_id, "board id"),
+        _path_id(stack_id, "stack id"),
+        _path_id(card_id, "card id"),
+    )
 
 
 def check_title(title: str) -> str:

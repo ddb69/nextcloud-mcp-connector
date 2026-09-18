@@ -2373,6 +2373,8 @@ def test_every_variable_the_code_reads_is_declared_in_the_manifest(
         registry.ENV_ALLOWLIST_ONLY,
         registry.ENV_ALLOWED_CLIENTS,
         config.ENV_TALK_SEND,
+        config.ENV_DECK_MANAGE,
+        config.ENV_DECK_DELETE,
         config.ENV_AUDIT_LOG,
         config.ENV_AUDIT_RETENTION_DAYS,
         config.ENV_AUDIT_MAX_BYTES,

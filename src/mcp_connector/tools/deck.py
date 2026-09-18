@@ -24,7 +24,7 @@ honest rather than a promise (threat T-01-62).
 
 from typing import Any
 
-from .. import ids
+from .. import config, ids
 from ..errors import ToolError
 from ..nextcloud import NcClients, capabilities
 from ..nextcloud.clients import deck as deck_client
@@ -124,6 +124,116 @@ async def create_card(
     if card.get("duedate"):
         result["duedate"] = card["duedate"]
     return result
+
+
+MANAGE_ACTIONS = (
+    "update_card",
+    "move_card",
+    "create_stack",
+    "create_label",
+    "assign_label",
+    "remove_label",
+    "delete_card",
+)
+
+
+async def manage(
+    clients: NcClients,
+    action: str,
+    board_id: str,
+    stack_id: str = "",
+    card_id: str = "",
+    *,
+    title: str = "",
+    description: str | None = None,
+    duedate: str | None = None,
+    target_stack_id: str = "",
+    label_id: str = "",
+    color: str = "",
+    expected_title: str = "",
+) -> dict[str, Any]:
+    """Perform one explicitly enabled Deck management action."""
+    if not config.deck_manage_enabled():
+        raise ToolError(
+            message="Deck management is disabled by the administrator.",
+            hint=f"Enable {config.ENV_DECK_MANAGE} and restart the connector.",
+        )
+    if action not in MANAGE_ACTIONS:
+        raise ToolError(
+            message=f"{action!r} is not a Deck management action.",
+            hint=f"Use one of: {', '.join(MANAGE_ACTIONS)}.",
+        )
+    await capabilities.require_app(clients, APP)
+    if not board_id.strip():
+        raise ToolError(message="Deck management needs a board_id.", hint=_BOARD_HINT)
+
+    if action == "create_stack":
+        return await deck_client.create_stack(clients.client, clients.creds, board_id, title=title)
+    if action == "create_label":
+        return await deck_client.create_label(
+            clients.client, clients.creds, board_id, title=title, color=color
+        )
+
+    if not stack_id.strip() or not card_id.strip():
+        raise ToolError(
+            message=f"{action} needs stack_id and card_id.",
+            hint="Use deck_browse with level=cards to get the canonical ids.",
+        )
+    if action == "update_card":
+        return await deck_client.update_card(
+            clients.client,
+            clients.creds,
+            board_id,
+            stack_id,
+            card_id,
+            title=title or None,
+            description=description,
+            duedate=duedate,
+        )
+    if action == "move_card":
+        return await deck_client.move_card(
+            clients.client,
+            clients.creds,
+            board_id,
+            stack_id,
+            card_id,
+            target_stack_id=target_stack_id,
+        )
+    if action in {"assign_label", "remove_label"}:
+        return await deck_client.set_card_label(
+            clients.client,
+            clients.creds,
+            board_id,
+            stack_id,
+            card_id,
+            label_id=label_id,
+            assigned=action == "assign_label",
+        )
+
+    if not config.deck_delete_enabled():
+        raise ToolError(
+            message="Deck deletion is disabled by the administrator.",
+            hint=f"Enable {config.ENV_DECK_DELETE} and restart the connector.",
+        )
+    current = await deck_client.get_card(clients.client, clients.creds, board_id, stack_id, card_id)
+    actual_title = str(current.get("title") or "")
+    if not expected_title or expected_title != actual_title:
+        raise ToolError(
+            message=(
+                f"Deletion confirmation does not match card {card_id}, whose current title "
+                f"is {actual_title!r}."
+            ),
+            hint="Repeat the call with expected_title set to that exact current title.",
+        )
+    deleted = await deck_client.delete_card(
+        clients.client, clients.creds, board_id, stack_id, card_id
+    )
+    return {
+        "deleted": True,
+        "id": ids.encode_card(board_id, stack_id, card_id),
+        "title": actual_title,
+        "server": deleted,
+    }
 
 
 async def _boards(clients: NcClients) -> list[dict[str, Any]]:

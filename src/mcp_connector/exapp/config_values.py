@@ -120,6 +120,8 @@ CONFIG_KEYS: tuple[str, ...] = (
     "oauth_allowlist_only",
     "oauth_allowed_clients",
     "talk_send",
+    "deck_manage",
+    "deck_delete",
     "audit_log",
 )
 
@@ -132,6 +134,8 @@ KEY_TO_ENV: Mapping[str, str] = {
     "oauth_allowlist_only": registry.ENV_ALLOWLIST_ONLY,
     "oauth_allowed_clients": registry.ENV_ALLOWED_CLIENTS,
     "talk_send": config.ENV_TALK_SEND,
+    "deck_manage": config.ENV_DECK_MANAGE,
+    "deck_delete": config.ENV_DECK_DELETE,
     "audit_log": config.ENV_AUDIT_LOG,
 }
 
@@ -141,7 +145,15 @@ KEY_TO_ENV: Mapping[str, str] = {
 #: the key out of the overlay, so the deploy variable and then the default in code decide,
 #: and that default is off (``config.audit_log_enabled``).
 SWITCH_KEYS: frozenset[str] = frozenset(
-    {"oauth_dcr", "oauth_cimd", "oauth_allowlist_only", "talk_send", "audit_log"}
+    {
+        "oauth_dcr",
+        "oauth_cimd",
+        "oauth_allowlist_only",
+        "talk_send",
+        "deck_manage",
+        "deck_delete",
+        "audit_log",
+    }
 )
 
 #: The spellings a switch may arrive in. Aligned with the two sets of ``oauth/registry.py``

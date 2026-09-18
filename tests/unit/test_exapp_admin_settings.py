@@ -161,6 +161,8 @@ async def test_the_seven_fields_are_the_seven_config_keys_in_order() -> None:
         "oauth_allowlist_only",
         "oauth_allowed_clients",
         "talk_send",
+        "deck_manage",
+        "deck_delete",
         "audit_log",
     ]
     assert tuple(field["id"] for field in fields) == config_values.CONFIG_KEYS
@@ -170,6 +172,8 @@ async def test_the_seven_fields_are_the_seven_config_keys_in_order() -> None:
         "checkbox",
         "checkbox",
         "text",
+        "checkbox",
+        "checkbox",
         "checkbox",
         "checkbox",
     ]
@@ -429,7 +433,7 @@ async def test_no_field_of_the_form_offers_a_level_of_recording() -> None:
     await admin_settings.register_admin_form(env=ENV)
 
     fields = json.loads(route.calls.last.request.content)["formScheme"]["fields"]
-    assert len(fields) == 7, "every field of the form is walked, not a subset of it"
+    assert len(fields) == 9, "every field of the form is walked, not a subset of it"
     for field in fields:
         assert LEVEL_WORD.search(json.dumps(field).lower()) is None, (
             f"{field['id']} offers a level of recording this app cannot deliver"

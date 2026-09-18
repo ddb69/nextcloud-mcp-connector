@@ -2605,7 +2605,7 @@ Berichts.
 | # | Nachweis | Kommando | Ergebnis |
 |---|----------|----------|----------|
 | 1 | Nichts liegt unverfolgt herum, und nichts hat sich seit dem Stand vor der Phase bewegt | `git status --short src/ appinfo/ pyproject.toml uv.lock` und `git diff --stat 90d2f68..HEAD -- src appinfo pyproject.toml uv.lock` | beide **leer**. `90d2f68` ist der letzte Commit vor `docs(17): research openDesk spike domain`, also der Stand vor der Phase. Die Phase hat 33 Dateien geändert, keine davon unter `src/` oder `appinfo/` |
-| 2 | Die Werkzeugoberfläche ist unverändert | `uv run python scripts/check_tool_budget.py` | `tools/list: 15712 bytes, 21 tools, budget 18000`, Zeichen für Zeichen dieselbe Zeile wie am 2026-08-28. Keine Grenze ist angehoben worden |
+| 2 | Die Werkzeugoberfläche ist unverändert | `uv run python scripts/check_tool_budget.py` | `tools/list: 15712 bytes, 21 tools, budget 18000`, Zeichen für Zeichen dieselbe Zeile wie am 2026-08-28. Das ist ein historischer Lauf; der aktuelle Umfang ist in `tests/contract/test_tool_surface.py` festgeschrieben. |
 | 3 | Die Vorgabesuite ist grün | `uv run pytest -q` | **2813 passed, 163 deselected** in 72,69 s. Es ist keine Test-Datei entstanden: die Spike-Messungen laufen außerhalb der Suite |
 | 4 | Lint und Format sind grün | `uv run ruff check .` und `uv run ruff format --check .` | `All checks passed!` und `202 files already formatted`. `.planning/` ist von ruff ausgenommen, und das bleibt so |
 
