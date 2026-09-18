@@ -13,6 +13,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Nothing here is released.
 
+## [0.2.0] - 2026-09-18
+
+Two reasons for a minor release rather than a patch. Accounts whose login name differs
+from their user id could not connect at all, which is a total outage for every LDAP
+instance that uses one, and the app can now be run without AppAPI. Both arrived through
+issue #5, reported and built by @DaniW42.
+
 ### Added
 
 - The consent screen and the result page name the account by its Nextcloud display name
@@ -713,6 +720,7 @@ First release, submitted to the Nextcloud App Store.
   never sees more than that user sees in the web interface.
 - A privacy and data flow description, see [docs/privacy.md](docs/privacy.md).
 
+[0.2.0]: https://github.com/street1983nk/nextcloud-mcp-connector/compare/v0.1.15...v0.2.0
 [0.1.15]: https://github.com/street1983nk/nextcloud-mcp-connector/compare/v0.1.14...v0.1.15
 [0.1.14]: https://github.com/street1983nk/nextcloud-mcp-connector/compare/v0.1.13...v0.1.14
 [0.1.13]: https://github.com/street1983nk/nextcloud-mcp-connector/compare/v0.1.12...v0.1.13
