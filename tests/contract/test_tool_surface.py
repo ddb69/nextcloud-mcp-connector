@@ -49,6 +49,7 @@ EXPECTED_TOOLS = {
     "notes_create",
     "deck_browse",
     "deck_create_card",
+    "deck_manage",
     "contacts_search",
     "unified_search",
     "prepare_context",
@@ -73,6 +74,8 @@ CREATE_TOOLS = {
     "tables_create_row",
     "talk_send",
 }
+
+DESTRUCTIVE_TOOLS = {"deck_manage"}
 
 # The documented exception to the schema diet: ChatGPT reads structured content (D-14).
 STRUCTURED_TOOLS = {"search", "fetch"}
@@ -223,7 +226,7 @@ async def test_the_two_deck_tools_are_listed_and_browse_takes_an_enum_level() ->
     async with Client(mcp, raise_exceptions=True) as client:
         tools = {tool.name: tool for tool in (await client.list_tools()).tools}
 
-    for name in ("deck_browse", "deck_create_card"):
+    for name in ("deck_browse", "deck_create_card", "deck_manage"):
         assert name in tools, f"{name} is part of the curated set (D-06)"
         assert tools[name].output_schema is None, "structured_output=False (schema diet)"
 
@@ -245,6 +248,12 @@ async def test_the_two_deck_tools_are_listed_and_browse_takes_an_enum_level() ->
     assert create.destructive_hint is False, "it can only create, never replace or delete"
     assert create.idempotent_hint is False, "a second call creates a second card"
     assert create.open_world_hint is False
+
+    manage = tools["deck_manage"].annotations
+    assert manage is not None
+    assert manage.read_only_hint is False
+    assert manage.destructive_hint is True
+    assert manage.open_world_hint is False
 
 
 @pytest.mark.anyio
@@ -512,7 +521,7 @@ async def test_the_curated_set_is_complete_and_only_the_chatgpt_profile_has_a_sc
         tools = {tool.name: tool for tool in (await client.list_tools()).tools}
 
     assert set(tools) == EXPECTED_TOOLS
-    assert len(tools) == 21, "the curated set is twenty-one tools, no more and no fewer"
+    assert len(tools) == 22, "the curated set is twenty-two tools, no more and no fewer"
 
     with_schema = {name for name, tool in tools.items() if tool.output_schema is not None}
     assert with_schema == STRUCTURED_TOOLS, (
@@ -685,6 +694,9 @@ async def test_every_tool_carries_honest_annotations() -> None:
             assert annotations.idempotent_hint is False, (
                 f"a second {name} call is a second object, not a no-op"
             )
+        elif name in DESTRUCTIVE_TOOLS:
+            assert annotations.read_only_hint is False
+            assert annotations.destructive_hint is True
         else:
             assert annotations.read_only_hint is True, f"{name} only reads"
 
@@ -737,7 +749,7 @@ async def test_the_readme_permission_table_matches_the_live_registry() -> None:
         if not line.startswith("| `"):
             continue
         cells = [cell.strip() for cell in line.strip("|").split("|")]
-        if len(cells) < 2 or cells[1] not in ("read", "create-only"):
+        if len(cells) < 2 or cells[1] not in ("read", "create-only", "destructive"):
             continue
         documented[cells[0].strip("`")] = cells[1]
 
@@ -745,7 +757,13 @@ async def test_the_readme_permission_table_matches_the_live_registry() -> None:
         "the README tool table and the registry must list the same names"
     )
     for name, level in sorted(documented.items()):
-        expected = "create-only" if name in CREATE_TOOLS else "read"
+        expected = (
+            "create-only"
+            if name in CREATE_TOOLS
+            else "destructive"
+            if name in DESTRUCTIVE_TOOLS
+            else "read"
+        )
         assert level == expected, f"README calls {name} {level}, the registry says {expected}"
 
 

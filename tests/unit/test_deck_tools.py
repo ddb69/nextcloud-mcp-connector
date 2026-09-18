@@ -264,6 +264,38 @@ async def test_create_card_reports_the_due_date_the_server_stored(clients: NcCli
 
 
 @pytest.mark.anyio
+async def test_management_is_off_unless_the_administrator_enables_it(
+    clients: NcClients, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("NC_MCP_DECK_MANAGE", raising=False)
+    with pytest.raises(ToolError) as excinfo:
+        await deck_tools.manage(clients, "create_stack", "2", title="Plan")
+    assert "disabled" in excinfo.value.message.lower()
+
+
+@pytest.mark.anyio
+async def test_delete_requires_both_switches_and_the_exact_current_title(
+    clients: NcClients, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("NC_MCP_DECK_MANAGE", "on")
+    monkeypatch.setenv("NC_MCP_DECK_DELETE", "on")
+    current = {"id": 101, "title": "Keep exact", "stackId": 11}
+    with respx.mock(assert_all_called=False) as mock:
+        mock_capabilities(mock)
+        mock.get(f"{CARDS_URL}/101").mock(return_value=httpx.Response(200, json=current))
+        deletion = mock.delete(f"{CARDS_URL}/101").mock(
+            return_value=httpx.Response(200, json=current)
+        )
+        with pytest.raises(ToolError) as excinfo:
+            await deck_tools.manage(
+                clients, "delete_card", "2", "11", "101", expected_title="stale"
+            )
+
+    assert "Keep exact" in excinfo.value.message
+    assert deletion.call_count == 0
+
+
+@pytest.mark.anyio
 async def test_a_user_without_board_rights_is_told_before_the_post(clients: NcClients) -> None:
     """SRV-04: canCreateBoards false plus a read-only board means no card, and it says why."""
     with respx.mock(assert_all_called=False) as mock:

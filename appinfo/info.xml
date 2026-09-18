@@ -508,6 +508,14 @@ Prérequis :
 				<display-name>Let assistants send Talk messages</display-name>
 				<description>The outgoing Talk channel of this app. On unless set to off. With it off no assistant can send a Talk message through this connector, whatever an account is allowed to do in Talk itself; reading conversations and their history is not affected.</description>			</variable>
 			<variable>
+				<name>NC_MCP_DECK_MANAGE</name>
+				<display-name>Let assistants manage Deck</display-name>
+				<description>Off unless set to on. Enables card updates and moves plus stack and label creation. Does not enable deletion.</description>			</variable>
+			<variable>
+				<name>NC_MCP_DECK_DELETE</name>
+				<display-name>Let assistants delete Deck cards</display-name>
+				<description>Off unless set to on and effective only with NC_MCP_DECK_MANAGE on. Deletion also requires the exact current card title.</description>			</variable>
+			<variable>
 				<name>NC_MCP_AUDIT_LOG</name>
 				<display-name>Keep a record of tool calls</display-name>
 				<description>Off unless set to on, and the way meant for an administrator is the admin settings of this app; this variable is the way of an installation set up by hand. With it on, every tool call is written down: the account it ran for, the name of the tool, the time, the app that called and whether the call was carried out or refused. No parameter value and no part of a result is written down.</description>			</variable>

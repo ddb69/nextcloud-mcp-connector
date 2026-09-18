@@ -661,6 +661,20 @@ ADMIN_FIELD_TALK_SEND_DESCRIPTION = (
     "history stay readable. A change takes effect after you disable and enable this app again."
 )
 
+ADMIN_FIELD_DECK_MANAGE_LABEL = "Let assistant apps manage Deck"
+ADMIN_FIELD_DECK_MANAGE_DESCRIPTION = (
+    "With this on, assistants may update and move cards and create stacks and labels. "
+    "Deleting remains off unless the separate switch below is also on. A change takes "
+    "effect after you disable and enable this app again."
+)
+
+ADMIN_FIELD_DECK_DELETE_LABEL = "Let assistant apps delete Deck cards"
+ADMIN_FIELD_DECK_DELETE_DESCRIPTION = (
+    "With this on and Deck management enabled, assistants may delete a card only after "
+    "supplying its exact current title. Leave this off unless deletion is required. A change "
+    "takes effect after you disable and enable this app again."
+)
+
 ADMIN_FIELD_AUDIT_LOG_LABEL = "Keep a record of tool calls"
 
 #: The form half of ``NC_MCP_AUDIT_LOG`` (D-14), now the long version phase 18 left to phase

@@ -108,6 +108,8 @@ def form_scheme(env: Mapping[str, str] | None = None) -> dict[str, Any]:
         allowlist_field,
         allowed_field,
         talk_send_field,
+        deck_manage_field,
+        deck_delete_field,
         audit_log_field,
     ) = CONFIG_KEYS
     return {
@@ -173,6 +175,20 @@ def form_scheme(env: Mapping[str, str] | None = None) -> dict[str, Any]:
                 # promised capability away from every installation that never reads this
                 # form, and ``config.talk_send_enabled`` answers True for the same reason.
                 "default": True,
+            },
+            {
+                "id": deck_manage_field,
+                "title": strings.ADMIN_FIELD_DECK_MANAGE_LABEL,
+                "description": strings.ADMIN_FIELD_DECK_MANAGE_DESCRIPTION,
+                "type": "checkbox",
+                "default": False,
+            },
+            {
+                "id": deck_delete_field,
+                "title": strings.ADMIN_FIELD_DECK_DELETE_LABEL,
+                "description": strings.ADMIN_FIELD_DECK_DELETE_DESCRIPTION,
+                "type": "checkbox",
+                "default": False,
             },
             {
                 "id": audit_log_field,

@@ -345,10 +345,29 @@ def _violations(relative: str, lines: Iterable[tuple[int, str]]) -> list[str]:
                 continue
             if needle == "DELETE" and _is_own_config_value(relative, text):
                 continue
+            if needle == "DELETE" and _is_opt_in_deck_management(relative, text):
+                continue
             if needle in TABLES_READ_NEEDLES and _is_a_tables_read(relative, text):
                 continue
             findings.append(f"{relative}:{number}: {needle!r} ({why}): {text.strip()}")
     return findings
+
+
+def _is_opt_in_deck_management(relative: str, text: str) -> bool:
+    """Permit only the named Deck switch and the one guarded HTTP deletion call."""
+    if relative in {"config.py", "tools/deck.py"} and "ENV_DECK_DELETE" in text:
+        return True
+    if (
+        relative
+        in {
+            "exapp/admin_settings.py",
+            "exapp/config_values.py",
+            "exapp/ui/strings.py",
+        }
+        and "DECK_DELETE" in text
+    ):
+        return True
+    return relative == "nextcloud/clients/deck.py" and text.strip() == '"DELETE",'
 
 
 def test_the_production_code_contains_no_destructive_request() -> None:

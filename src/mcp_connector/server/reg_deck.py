@@ -4,20 +4,22 @@
 the model sees the three valid values instead of guessing "card" or "lists" and paying a
 round trip for the correction (D-06, D-14).
 
-Both tools are listed unconditionally, even on an instance without the Deck app. A
+All Deck tools are listed unconditionally, even on an instance without the Deck app. A
 credential dependent ``tools/list`` is not cacheable, breaks the token budget gate and
 surprises clients that persist tool lists; the honest answer to a missing app is the
 sentence the tool returns (SRV-04).
 """
 
+import json
 from typing import Annotated, Literal
 
 from mcp.server.mcpserver import Context
 from pydantic import Field
 
 from .. import deps
+from ..errors import ToolError
 from ..tools import deck as deck_tools
-from . import CREATE_ONLY, READ_ONLY, compact, graceful, mcp
+from . import CREATE_ONLY, DESTRUCTIVE, READ_ONLY, compact, graceful, mcp
 
 
 @mcp.tool(annotations=READ_ONLY, structured_output=False)
@@ -69,5 +71,63 @@ async def deck_create_card(
             title=title,
             description=description or None,
             duedate=duedate or None,
+        )
+    )
+
+
+@mcp.tool(annotations=DESTRUCTIVE, structured_output=False)
+@graceful
+async def deck_manage(
+    action: Annotated[
+        Literal[
+            "update_card",
+            "move_card",
+            "create_stack",
+            "create_label",
+            "assign_label",
+            "remove_label",
+            "delete_card",
+        ],
+        Field(description="Management action; administrator opt-in required"),
+    ],
+    board_id: Annotated[str, Field(description="Board id from deck_browse")],
+    values: Annotated[
+        str,
+        Field(
+            description=(
+                "JSON object: stack_id, card_id, title, description, duedate, "
+                "target_stack_id, label_id, color or expected_title"
+            )
+        ),
+    ] = "{}",
+    ctx: Context | None = None,
+) -> str:
+    """Manage Deck cards, stacks and labels when explicitly enabled by an administrator."""
+    try:
+        supplied = json.loads(values)
+    except (TypeError, json.JSONDecodeError):
+        raise ToolError(
+            message="Deck management values are not a JSON object.",
+            hint='Use an object such as {"stack_id":"11","card_id":"42"}.',
+        ) from None
+    if not isinstance(supplied, dict):
+        raise ToolError(
+            message="Deck management values are not a JSON object.",
+            hint='Use an object such as {"title":"Planned"}.',
+        )
+    return compact(
+        await deck_tools.manage(
+            deps.resolve_clients(ctx),
+            action,
+            board_id,
+            str(supplied.get("stack_id") or ""),
+            str(supplied.get("card_id") or ""),
+            title=str(supplied.get("title") or ""),
+            description=supplied.get("description"),
+            duedate=supplied.get("duedate"),
+            target_stack_id=str(supplied.get("target_stack_id") or ""),
+            label_id=str(supplied.get("label_id") or ""),
+            color=str(supplied.get("color") or ""),
+            expected_title=str(supplied.get("expected_title") or ""),
         )
     )

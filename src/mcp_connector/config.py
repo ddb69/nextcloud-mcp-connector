@@ -47,6 +47,8 @@ ENV_STATIC_BEARER = "NC_MCP_STATIC_BEARER"
 ENV_DISABLE_DNS_REBINDING = "NC_MCP_DISABLE_DNS_REBINDING_PROTECTION"
 ENV_PUBLIC_URL = "NC_MCP_PUBLIC_URL"
 ENV_TALK_SEND = "NC_MCP_TALK_SEND"
+ENV_DECK_MANAGE = "NC_MCP_DECK_MANAGE"
+ENV_DECK_DELETE = "NC_MCP_DECK_DELETE"
 
 # The audit log of phase 18. The first one is the switch the whole feature hangs on (D-14),
 # the other two move the two limits of the store (D-09). All three read by the three
@@ -549,6 +551,21 @@ def talk_send_enabled(env: Mapping[str, str] | None = None) -> bool:
     source = os.environ if env is None else env
     value = (source.get(ENV_TALK_SEND) or "").strip().lower()
     return value not in _FALSE_VALUES
+
+
+def deck_manage_enabled(env: Mapping[str, str] | None = None) -> bool:
+    """Whether non-create-only Deck actions are explicitly enabled by an administrator."""
+    source = os.environ if env is None else env
+    return (source.get(ENV_DECK_MANAGE) or "").strip().lower() in _TRUE_VALUES
+
+
+def deck_delete_enabled(env: Mapping[str, str] | None = None) -> bool:
+    """Whether Deck deletion is explicitly enabled in addition to Deck management."""
+    source = os.environ if env is None else env
+    return (
+        deck_manage_enabled(source)
+        and (source.get(ENV_DECK_DELETE) or "").strip().lower() in _TRUE_VALUES
+    )
 
 
 def audit_log_enabled(env: Mapping[str, str] | None = None) -> bool:

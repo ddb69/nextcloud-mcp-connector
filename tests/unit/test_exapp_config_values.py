@@ -73,7 +73,7 @@ def answer(values: dict[str, Any], *, camel: bool = False) -> respx.Route:
 # --- the contract of the seven keys --------------------------------------------------
 
 
-def test_the_seven_keys_are_the_field_ids_of_the_admin_form() -> None:
+def test_the_nine_keys_are_the_field_ids_of_the_admin_form() -> None:
     """Pattern 1 of the research: the config key IS the field id, without a prefix.
 
     Five since finding B-1 of the v1.0 milestone audit: ``NC_MCP_OAUTH_CIMD`` was a deploy
@@ -91,6 +91,8 @@ def test_the_seven_keys_are_the_field_ids_of_the_admin_form() -> None:
         "oauth_allowlist_only",
         "oauth_allowed_clients",
         "talk_send",
+        "deck_manage",
+        "deck_delete",
         "audit_log",
     )
 
@@ -104,6 +106,8 @@ def test_every_key_maps_to_the_variable_the_existing_code_already_reads() -> Non
         "oauth_allowlist_only": registry.ENV_ALLOWLIST_ONLY,
         "oauth_allowed_clients": registry.ENV_ALLOWED_CLIENTS,
         "talk_send": config.ENV_TALK_SEND,
+        "deck_manage": config.ENV_DECK_MANAGE,
+        "deck_delete": config.ENV_DECK_DELETE,
         "audit_log": config.ENV_AUDIT_LOG,
     }
     assert set(config_values.KEY_TO_ENV) == set(config_values.CONFIG_KEYS)
@@ -139,7 +143,7 @@ def test_only_one_place_in_this_module_reaches_the_network() -> None:
 
 @pytest.mark.anyio
 @respx.mock
-async def test_one_request_asks_for_all_seven_keys() -> None:
+async def test_one_request_asks_for_all_nine_keys() -> None:
     """Seven values, one round trip: the read takes a list and there is nothing to loop."""
     route = answer({"public_url": ADMIN_URL})
 
@@ -156,6 +160,8 @@ async def test_one_request_asks_for_all_seven_keys() -> None:
             "oauth_allowlist_only",
             "oauth_allowed_clients",
             "talk_send",
+            "deck_manage",
+            "deck_delete",
             "audit_log",
         ]
     }

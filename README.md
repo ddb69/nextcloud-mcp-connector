@@ -15,7 +15,7 @@ You bring the model, and no content leaves your server.
 
 ## What it does
 
-- 21 tools across nine app families: files, calendar, notes, Deck, contacts, Tables, Talk,
+- 22 tools across nine app families: files, calendar, notes, Deck, contacts, Tables, Talk,
   Mail and cloud wide search
 - OAuth 2.1 to the MCP authorization specification: dynamic client registration, PKCE S256,
   audience bound tokens, refresh rotation with reuse detection and immediate revocation.
@@ -30,26 +30,28 @@ You bring the model, and no content leaves your server.
   clients with a hard tool limit
 - No cron, no indexing, no telemetry, no copy of your data, and no credential is ever logged
 
-## What this server cannot do
+## What this server cannot do by default
 
-- No deleting: no tool issues a DELETE against files, events, notes, cards or contacts
-- No overwriting: writes are create-only, and `files_upload` refuses an existing path with a
-  clear error instead of replacing it
-- No moving and no renaming, no share changes and no permission changes
+- No deleting unless an administrator enables both Deck management and Deck deletion; even
+  then only Deck cards can be deleted and their exact current title must be confirmed
+- No overwriting outside the separately enabled Deck management mode; `files_upload` still
+  refuses an existing path instead of replacing it
+- No moving or renaming outside enabled Deck card moves, no share changes and no permission changes
 - Mail is strictly read only: no sending, no draft, no move, no flag, no delete, and no
   attachment download
 - No admin access: the server acts as one user and inherits exactly that user's permissions
 - No full text search inside file contents unless a search app such as Findling is installed
 
-That is a design constraint and not a promise of good behaviour: a contract test reads the
-modules and fails on the first destructive call,
+That boundary is enforced in code: a contract test reads the modules and permits only the
+named, administratively gated Deck deletion path,
 [tests/contract/test_no_destructive_calls.py](tests/contract/test_no_destructive_calls.py).
 
 ## Tools
 
 **read** means the tool only reads, **create-only** means it can create new objects but never
-modifies or removes existing ones. The table is not maintained by hand: a contract test reads
-the live registry and fails if a name or a level disagrees with it.
+modifies or removes existing ones, and **destructive** marks the opt-in Deck management tool.
+The table is not maintained by hand: a contract test reads the live registry and fails if a
+name or a level disagrees with it.
 
 | Tool | Permission | What it does |
 |------|------------|--------------|
@@ -64,6 +66,7 @@ the live registry and fails if a name or a level disagrees with it.
 | `notes_create` | create-only | A new note; existing notes are never changed |
 | `deck_browse` | read | Deck boards, stacks and cards |
 | `deck_create_card` | create-only | A new card in a stack; existing cards are never changed |
+| `deck_manage` | destructive | Opt-in card, stack and label management; deletion also needs exact-title confirmation |
 | `tables_browse` | read | Tables: the tables, the columns of one, or its rows |
 | `tables_create_row` | create-only | A row addressed by column titles; existing rows are never changed |
 | `talk_browse` | read | Talk conversations and the history of one; reading leaves no trace |

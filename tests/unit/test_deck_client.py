@@ -184,6 +184,75 @@ async def test_create_card_passes_description_and_duedate_through(
 
 
 @pytest.mark.anyio
+async def test_update_card_preserves_required_fields_and_changes_selected_ones(
+    client: httpx.AsyncClient, creds: Credentials
+) -> None:
+    current = {**CREATED_CARD, "id": 101, "title": "Old", "owner": "alice", "order": 7}
+    updated = {**current, "title": "New", "description": "Changed"}
+    with respx.mock(assert_all_called=True) as mock:
+        mock.get(f"{CARDS_URL}/101").mock(return_value=httpx.Response(200, json=current))
+        route = mock.put(f"{CARDS_URL}/101").mock(return_value=httpx.Response(200, json=updated))
+        result = await deck_client.update_card(
+            client, creds, 2, 11, 101, title="New", description="Changed"
+        )
+
+    body = json.loads(route.calls[0].request.content)
+    assert body["owner"] == "alice"
+    assert body["order"] == 7
+    assert body["title"] == "New"
+    assert result["description"] == "Changed"
+
+
+@pytest.mark.anyio
+async def test_move_card_uses_the_reorder_endpoint(
+    client: httpx.AsyncClient, creds: Credentials
+) -> None:
+    with respx.mock(assert_all_called=True) as mock:
+        route = mock.put(f"{CARDS_URL}/101/reorder").mock(
+            return_value=httpx.Response(200, json={**CREATED_CARD, "stackId": 12})
+        )
+        result = await deck_client.move_card(client, creds, 2, 11, 101, target_stack_id=12)
+
+    assert json.loads(route.calls[0].request.content) == {"stackId": 12, "order": 999}
+    assert result["stackId"] == 12
+
+
+@pytest.mark.anyio
+async def test_create_stack_label_and_assign_label_use_the_documented_routes(
+    client: httpx.AsyncClient, creds: Credentials
+) -> None:
+    with respx.mock(assert_all_called=True) as mock:
+        mock.post(STACKS_URL).mock(
+            return_value=httpx.Response(200, json={"id": 13, "title": "Plan"})
+        )
+        mock.post(f"{BOARDS_URL}/2/labels").mock(
+            return_value=httpx.Response(200, json={"id": 7, "title": "Strategy", "color": "0082C9"})
+        )
+        assigned = mock.put(f"{CARDS_URL}/101/assignLabel").mock(
+            return_value=httpx.Response(200, json={**CREATED_CARD, "id": 101})
+        )
+        await deck_client.create_stack(client, creds, 2, title="Plan")
+        await deck_client.create_label(client, creds, 2, title="Strategy", color="#0082c9")
+        await deck_client.set_card_label(client, creds, 2, 11, 101, label_id=7, assigned=True)
+
+    assert json.loads(assigned.calls[0].request.content) == {"labelId": 7}
+
+
+@pytest.mark.anyio
+async def test_delete_card_uses_exactly_one_explicit_delete_request(
+    client: httpx.AsyncClient, creds: Credentials
+) -> None:
+    with respx.mock(assert_all_called=True) as mock:
+        route = mock.delete(f"{CARDS_URL}/101").mock(
+            return_value=httpx.Response(200, json={**CREATED_CARD, "id": 101})
+        )
+        result = await deck_client.delete_card(client, creds, 2, 11, 101)
+
+    assert route.call_count == 1
+    assert result["id"] == 101
+
+
+@pytest.mark.anyio
 async def test_a_title_over_255_characters_never_reaches_nextcloud(
     client: httpx.AsyncClient, creds: Credentials
 ) -> None:
@@ -325,11 +394,12 @@ async def test_a_board_list_that_is_not_a_list_is_reported_as_such(
     assert excinfo.value.hint
 
 
-def test_the_module_has_no_delete_or_update_path() -> None:
-    """The server promise: this client cannot overwrite or remove anything (T-01-62)."""
+def test_the_module_has_no_implicit_convenience_delete_helper() -> None:
+    """Deletion uses an explicit request verb so the guarded path stays conspicuous."""
     source = Path(deck_client.__file__).read_text(encoding="utf-8")
-    for forbidden in (".delete(", ".put(", ".patch("):
-        assert forbidden not in source, f"{forbidden} has no place in a create-only client"
+    assert ".delete(" not in source
+    assert ".patch(" not in source
+    assert source.count('"DELETE"') == 1
 
 
 def test_the_module_reads_deck_errors_with_the_app_json_parser() -> None:
