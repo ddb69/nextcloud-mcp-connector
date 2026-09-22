@@ -465,26 +465,21 @@ def main() -> None:
     # opens a socket, and before every check, so the checks judge the values that will be used.
     resolved, refused = _resolved_env()
 
-    # The one exception to the sentence above, and it contradicts it on purpose, so it says
-    # why (TALK-04, way A of 09-RESEARCH.md). A tool has no `resolved` mapping in its hand:
-    # `ctx` carries headers and nothing else, a header is settable from outside, and a
-    # security switch whose off state hangs on a header being scrubbed reliably is worse than
-    # the activation cycle. So the resolved value of this one key goes back into the process
-    # environment, where `config.talk_send_enabled` reads it per call, exactly as
-    # `select_mode`, `static_bearer` and `exapp_configured` read the environment per call.
-    # `os.environ` is not module state in the sense of D-20: it is the environment of this
-    # process and not a dictionary of one of our modules, which is why
-    # tests/contract/test_no_destructive_calls.py::ALLOWED_MODULE_STATE stays untouched at
-    # its two entries. Exactly one key travels, never the whole overlay, so this exception
-    # cannot grow by habit. The price is the known one: a changed value takes effect after
-    # this app has been disabled and enabled once, the same price the five other values pay,
-    # and it is named in the description of the form field, in docs/oauth-setup.md and in
-    # the refusal sentence of the tool. The alternative, reading the value out of Nextcloud
-    # per send, is refused: one more round trip per message, a second failure mode, and the
-    # answer to a failed read would have to be fail closed, which contradicts "on by
-    # default" on every network hiccup.
-    if config.ENV_TALK_SEND in resolved:
-        os.environ[config.ENV_TALK_SEND] = resolved[config.ENV_TALK_SEND]
+    # The runtime tools do not receive the resolved mapping: their configuration helpers read
+    # the process environment on each call. Copy only the three switches those tools consume,
+    # never the whole admin overlay. The values still come from the trusted start-time read,
+    # not from request headers, and a changed value takes effect after one disable/enable cycle.
+    # Keeping Deck management and deletion in the same path as Talk avoids a state where the
+    # start log reports the administrator's choice while the tool continues to read the
+    # unresolved deploy environment.
+    runtime_switches = (
+        config.ENV_TALK_SEND,
+        config.ENV_DECK_MANAGE,
+        config.ENV_DECK_DELETE,
+    )
+    for name in runtime_switches:
+        if name in resolved:
+            os.environ[name] = resolved[name]
 
     try:
         config.exapp_settings(resolved)

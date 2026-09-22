@@ -1043,13 +1043,15 @@ def deployed(
     ):
         monkeypatch.delenv(name, raising=False)
 
-    # ``main`` writes this one key back into ``os.environ`` (plan 09-02), and monkeypatch
-    # only undoes what it has touched itself. Recording the variable here before the start
-    # is therefore what keeps a value written by one check from answering
-    # ``config.talk_send_enabled`` in the next one: the setenv records that it was unset,
-    # the delenv removes it again, and the teardown restores that unset state.
-    monkeypatch.setenv(config.ENV_TALK_SEND, "")
-    monkeypatch.delenv(config.ENV_TALK_SEND)
+    # ``main`` writes the runtime tool switches back into ``os.environ``. Record their
+    # unset state through monkeypatch so one start cannot leak into the next test.
+    for name in (
+        config.ENV_TALK_SEND,
+        config.ENV_DECK_MANAGE,
+        config.ENV_DECK_DELETE,
+    ):
+        monkeypatch.setenv(name, "")
+        monkeypatch.delenv(name)
 
     for name, value in (env or {}).items():
         monkeypatch.setenv(name, value)
@@ -1520,6 +1522,33 @@ def test_a_stored_talk_switch_of_on_reaches_the_process_environment(
     assert config.talk_send_enabled() is True
 
 
+def test_stored_deck_switches_reach_the_runtime_tools(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, admin_config: AdminConfig
+) -> None:
+    """Deck tools read os.environ per call, so both resolved admin values must reach it."""
+    admin_config.values["deck_manage"] = "1"
+    admin_config.values["deck_delete"] = "1"
+
+    start(monkeypatch, tmp_path)
+
+    assert os.environ[config.ENV_DECK_MANAGE] == config_values.SWITCH_ON
+    assert os.environ[config.ENV_DECK_DELETE] == config_values.SWITCH_ON
+    assert config.deck_manage_enabled() is True
+    assert config.deck_delete_enabled() is True
+
+
+def test_a_start_without_stored_deck_switches_leaves_both_variables_alone(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An installation that configured no Deck access keeps the fail-closed defaults."""
+    start(monkeypatch, tmp_path)
+
+    assert config.ENV_DECK_MANAGE not in os.environ
+    assert config.ENV_DECK_DELETE not in os.environ
+    assert config.deck_manage_enabled() is False
+    assert config.deck_delete_enabled() is False
+
+
 def test_a_start_without_a_stored_talk_switch_leaves_the_variable_alone(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -1547,31 +1576,26 @@ def test_a_stored_talk_switch_wins_over_the_deploy_variable(
     assert config.talk_send_enabled() is False
 
 
-def test_the_entry_point_writes_exactly_one_key_into_the_process_environment() -> None:
-    """The exception of D-20 stays one exception, and it keeps its reasoning.
-
-    Constructive rather than documented: a second write, or a write of the whole overlay,
-    fails here, and so does a refactor that keeps the line but drops the comment block that
-    explains why it contradicts the comment above it (A7).
-    """
+def test_the_entry_point_exports_only_runtime_tool_switches() -> None:
+    """The admin overlay must not be copied wholesale into the process environment."""
     source = Path(entry_exapp.__file__).read_text(encoding="utf-8")
-    writes = re.findall(r"os\.environ\[[^\]]+\]\s*=", source)
 
-    assert writes == ["os.environ[config.ENV_TALK_SEND] ="]
+    block_start = source.index("runtime_switches = (")
+    block_end = source.index("\n\n    try:", block_start)
+    block = source[block_start:block_end]
 
-    lines = source.splitlines()
-    index = next(
-        number for number, line in enumerate(lines) if re.search(r"os\.environ\[[^\]]+\]\s*=", line)
-    )
-    reasoning = [line for line in lines[max(0, index - 14) : index] if line.strip().startswith("#")]
-    assert len(reasoning) >= 4
+    assert "config.ENV_TALK_SEND" in block
+    assert "config.ENV_DECK_MANAGE" in block
+    assert "config.ENV_DECK_DELETE" in block
+    assert "os.environ[name] = resolved[name]" in block
+    assert "os.environ.update" not in block
 
 
 def test_the_write_happens_before_the_application_is_built() -> None:
     """A switch that is exported after the first socket has not switched anything off."""
     source = Path(entry_exapp.__file__).read_text(encoding="utf-8")
 
-    export = source.index("os.environ[config.ENV_TALK_SEND]")
+    export = source.index("runtime_switches = (")
     resolved = source.index("resolved, refused = _resolved_env()")
     served = source.index("uvicorn.run(")
 
