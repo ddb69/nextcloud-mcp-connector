@@ -44,6 +44,9 @@ SUPPORTED_API_VERSION = "1.0"
 #: Base path of the Deck REST API. ``index.php`` is not optional on every instance.
 DECK_API_PREFIX = f"/index.php/apps/deck/api/v{SUPPORTED_API_VERSION}"
 
+#: Base path of Deck\'s app routes used by its own web client.
+DECK_APP_PREFIX = "/index.php/apps/deck"
+
 #: Web route of a single card (``deck.page.redirectToCard``), used for the ``url`` field.
 DECK_WEB_PREFIX = "/index.php/apps/deck/card"
 
@@ -72,6 +75,13 @@ def api_url(creds: Credentials, path: str = "") -> str:
     if path and not path.startswith("/"):
         raise ValueError(f"a Deck path must start with a slash (got {path!r})")
     return f"{creds.base_url}{DECK_API_PREFIX}{path}"
+
+
+def app_url(creds: Credentials, path: str = "") -> str:
+    """Build a Deck app URL; ``path`` is empty or starts with a slash."""
+    if path and not path.startswith("/"):
+        raise ValueError(f"a Deck app path must start with a slash (got {path!r})")
+    return f"{creds.base_url}{DECK_APP_PREFIX}{path}"
 
 
 def web_url(creds: Credentials, card_id: str | int) -> str:
@@ -190,17 +200,21 @@ async def update_card(
     board, stack, card = _card_path(board_id, stack_id, card_id)
     current = await get_card(client, creds, board, stack, card)
     body = {
+        **current,
+        "id": int(card),
+        "stackId": int(stack),
         "title": check_title(title if title is not None else str(current.get("title") or "")),
         "type": current.get("type") or CARD_TYPE,
-        "owner": current.get("owner") or creds.user,
         "description": description if description is not None else current.get("description") or "",
         "order": current.get("order", DEFAULT_CARD_ORDER),
+        "archived": bool(current.get("archived", False)),
+        "deletedAt": current.get("deletedAt", 0),
         "duedate": check_duedate(duedate)
         if duedate
         else (None if duedate == "" else current.get("duedate")),
     }
     response = await client.put(
-        api_url(creds, f"/boards/{board}/stacks/{stack}/cards/{card}"),
+        app_url(creds, f"/cards/{card}"),
         json=body,
         headers=dict(DECK_HEADERS),
         auth=creds.auth(),
@@ -218,16 +232,26 @@ async def move_card(
     target_stack_id: str | int,
     order: int = DEFAULT_CARD_ORDER,
 ) -> dict[str, Any]:
-    """Move a card through Deck's reorder endpoint."""
+    """Move a card through the reorder endpoint used by Deck's web client."""
     board, stack, card = _card_path(board_id, stack_id, card_id)
     target = _path_id(target_stack_id, "target stack id")
+
+    current = await get_card(client, creds, board, stack, card)
+    body = {
+        **current,
+        "stackId": int(target),
+        "order": order,
+    }
+
     response = await client.put(
-        api_url(creds, f"/boards/{board}/stacks/{stack}/cards/{card}/reorder"),
-        json={"stackId": int(target), "order": order},
+        app_url(creds, f"/cards/{card}/reorder"),
+        json=body,
         headers=dict(DECK_HEADERS),
         auth=creds.auth(),
     )
-    return _as_dict(ocs.parse_app_json(response, what=f"the moved card {card}"), what="a card")
+    ocs.parse_app_json(response, what=f"the moved card {card}")
+
+    return await get_card(client, creds, board, target, card)
 
 
 async def create_stack(
