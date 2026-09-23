@@ -188,11 +188,21 @@ async def test_create_card_passes_description_and_duedate_through(
 async def test_update_card_preserves_required_fields_and_changes_selected_ones(
     client: httpx.AsyncClient, creds: Credentials
 ) -> None:
-    current = {**CREATED_CARD, "id": 101, "title": "Old", "owner": "alice", "order": 7}
+    current = {
+        **CREATED_CARD,
+        "id": 101,
+        "title": "Old",
+        "owner": "alice",
+        "order": 7,
+        "archived": True,
+        "deletedAt": 0,
+    }
     updated = {**current, "title": "New", "description": "Changed"}
     with respx.mock(assert_all_called=True) as mock:
         mock.get(f"{CARDS_URL}/101").mock(return_value=httpx.Response(200, json=current))
-        route = mock.put(f"{CARDS_URL}/101").mock(return_value=httpx.Response(200, json=updated))
+        route = mock.put(f"{DECK_APP_BASE}/cards/101").mock(
+            return_value=httpx.Response(200, json=updated)
+        )
         result = await deck_client.update_card(
             client, creds, 2, 11, 101, title="New", description="Changed"
         )
@@ -200,6 +210,9 @@ async def test_update_card_preserves_required_fields_and_changes_selected_ones(
     body = json.loads(route.calls[0].request.content)
     assert body["owner"] == "alice"
     assert body["order"] == 7
+    assert body["archived"] is True
+    assert body["deletedAt"] == 0
+    assert body["stackId"] == 11
     assert body["title"] == "New"
     assert result["description"] == "Changed"
 
