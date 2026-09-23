@@ -200,17 +200,21 @@ async def update_card(
     board, stack, card = _card_path(board_id, stack_id, card_id)
     current = await get_card(client, creds, board, stack, card)
     body = {
+        **current,
+        "id": int(card),
+        "stackId": int(stack),
         "title": check_title(title if title is not None else str(current.get("title") or "")),
         "type": current.get("type") or CARD_TYPE,
-        "owner": current.get("owner") or creds.user,
         "description": description if description is not None else current.get("description") or "",
         "order": current.get("order", DEFAULT_CARD_ORDER),
+        "archived": bool(current.get("archived", False)),
+        "deletedAt": current.get("deletedAt", 0),
         "duedate": check_duedate(duedate)
         if duedate
         else (None if duedate == "" else current.get("duedate")),
     }
     response = await client.put(
-        api_url(creds, f"/boards/{board}/stacks/{stack}/cards/{card}"),
+        app_url(creds, f"/cards/{card}"),
         json=body,
         headers=dict(DECK_HEADERS),
         auth=creds.auth(),
