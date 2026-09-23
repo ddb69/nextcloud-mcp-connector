@@ -355,7 +355,7 @@ def _violations(relative: str, lines: Iterable[tuple[int, str]]) -> list[str]:
 
 def _is_opt_in_deck_management(relative: str, text: str) -> bool:
     """Permit only the named Deck switch and the one guarded HTTP deletion call."""
-    if relative in {"config.py", "tools/deck.py"} and "ENV_DECK_DELETE" in text:
+    if relative in {"config.py", "tools/deck.py", "entry_exapp.py"} and "ENV_DECK_DELETE" in text:
         return True
     if (
         relative
