@@ -28,6 +28,7 @@ USER = "alice"
 SECRET = "app-password-test"
 
 DECK_BASE = f"{BASE}/index.php/apps/deck/api/v1.0"
+DECK_APP_BASE = f"{BASE}/index.php/apps/deck"
 BOARDS_URL = f"{DECK_BASE}/boards"
 STACKS_URL = f"{DECK_BASE}/boards/2/stacks"
 CARDS_URL = f"{DECK_BASE}/boards/2/stacks/11/cards"
@@ -204,16 +205,27 @@ async def test_update_card_preserves_required_fields_and_changes_selected_ones(
 
 
 @pytest.mark.anyio
-async def test_move_card_uses_the_reorder_endpoint(
+async def test_move_card_uses_the_web_reorder_endpoint_and_reads_the_target(
     client: httpx.AsyncClient, creds: Credentials
 ) -> None:
+    current = {**CREATED_CARD, "id": 101}
+    moved = {**current, "stackId": 12}
+
     with respx.mock(assert_all_called=True) as mock:
-        route = mock.put(f"{CARDS_URL}/101/reorder").mock(
-            return_value=httpx.Response(200, json={**CREATED_CARD, "stackId": 12})
+        mock.get(f"{CARDS_URL}/101").mock(return_value=httpx.Response(200, json=current))
+        route = mock.put(f"{DECK_APP_BASE}/cards/101/reorder").mock(
+            return_value=httpx.Response(200, json=True)
+        )
+        mock.get(f"{DECK_BASE}/boards/2/stacks/12/cards/101").mock(
+            return_value=httpx.Response(200, json=moved)
         )
         result = await deck_client.move_card(client, creds, 2, 11, 101, target_stack_id=12)
 
-    assert json.loads(route.calls[0].request.content) == {"stackId": 12, "order": 999}
+    body = json.loads(route.calls[0].request.content)
+    assert body["id"] == 101
+    assert body["title"] == "Neue Karte"
+    assert body["stackId"] == 12
+    assert body["order"] == 999
     assert result["stackId"] == 12
 
 
