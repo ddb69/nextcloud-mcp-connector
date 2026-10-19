@@ -13,6 +13,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Nothing here is released.
 
+## [0.2.10] - 2026-10-19
+
+### Fixed
+
+- Empty-stack deletion accepts Deck responses that omit the `cards` field.
+- Both card views and the exact-title guard are still checked before deletion.
+
 ## [0.2.9] - 2026-10-19
 
 ### Added

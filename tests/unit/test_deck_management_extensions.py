@@ -86,8 +86,11 @@ async def test_stack_update_preserves_unspecified_field(
 
 
 @pytest.mark.anyio
-async def test_empty_stack_deletion_reads_both_views_and_confirms_title(clients: NcClients) -> None:
-    empty = [{"id": 11, "title": "Empty", "cards": []}]
+@pytest.mark.parametrize("include_cards", [True, False])
+async def test_empty_stack_deletion_reads_both_views_and_confirms_title(
+    clients: NcClients, include_cards: bool
+) -> None:
+    empty = [{"id": 11, "title": "Empty", **({"cards": []} if include_cards else {})}]
     with respx.mock as mock:
         allow_deck(mock)
         mock.get(STACKS).respond(200, json=empty)

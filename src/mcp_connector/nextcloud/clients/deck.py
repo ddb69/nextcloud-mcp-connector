@@ -340,7 +340,9 @@ async def delete_empty_stack(
                 message="Stack deletion title does not match.",
                 hint="Set expected_title to the exact current stack title.",
             )
-        if not isinstance(current.get("cards"), list) or current["cards"]:
+        # Deck omits the cards key when the stack has no cards.
+        cards = current.get("cards", [])
+        if not isinstance(cards, list) or cards:
             raise ToolError(
                 message="Only an empty stack can be deleted, including archived cards.",
                 hint="Move its cards first; no cards are deleted by this action.",
