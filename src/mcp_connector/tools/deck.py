@@ -47,6 +47,7 @@ async def browse(
     board_id: str | None = None,
     stack_id: str | None = None,
     limit: int = DEFAULT_LIMIT,
+    archived: bool = False,
 ) -> dict[str, Any]:
     """Walk the user's Deck: boards, the stacks of a board, or its cards."""
     if level not in LEVELS:
@@ -65,10 +66,12 @@ async def browse(
             hint=_BOARD_HINT,
         )
 
-    stacks = await deck_client.get_stacks(clients.client, clients.creds, board)
+    stacks = await deck_client.get_stacks(clients.client, clients.creds, board, archived=archived)
     if level == "stacks":
         return _envelope(level, [_stack(stack) for stack in stacks], capped)
-    return _envelope(level, _cards(clients, board, stacks, (stack_id or "").strip()), capped)
+    return _envelope(
+        level, _cards(clients, board, stacks, (stack_id or "").strip(), archived=archived), capped
+    )
 
 
 async def create_card(
@@ -129,7 +132,13 @@ async def create_card(
 MANAGE_ACTIONS = (
     "update_card",
     "move_card",
+    "reorder_card",
+    "archive_card",
+    "unarchive_card",
+    "set_card_colors",
     "create_stack",
+    "update_stack",
+    "delete_stack",
     "create_label",
     "assign_label",
     "remove_label",
@@ -149,8 +158,10 @@ async def manage(
     duedate: str | None = None,
     target_stack_id: str = "",
     label_id: str = "",
-    color: str = "",
+    color: str | None = None,
     expected_title: str = "",
+    order: int | None = None,
+    cards: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Perform one explicitly enabled Deck management action."""
     if not config.deck_manage_enabled():
@@ -167,12 +178,41 @@ async def manage(
     if not board_id.strip():
         raise ToolError(message="Deck management needs a board_id.", hint=_BOARD_HINT)
 
+    if order is not None:
+        deck_client.check_order(order)
+
+    if action == "set_card_colors":
+        return await _set_card_colors(clients, board_id, cards)
+
     if action == "create_stack":
-        return await deck_client.create_stack(clients.client, clients.creds, board_id, title=title)
+        return await deck_client.create_stack(
+            clients.client,
+            clients.creds,
+            board_id,
+            title=title,
+            order=order if order is not None else deck_client.DEFAULT_CARD_ORDER,
+        )
     if action == "create_label":
         return await deck_client.create_label(
-            clients.client, clients.creds, board_id, title=title, color=color
+            clients.client, clients.creds, board_id, title=title, color=color or ""
         )
+
+    if action in {"update_stack", "delete_stack"}:
+        if not stack_id.strip():
+            raise ToolError(message="This action needs a stack_id.", hint=_BOARD_HINT)
+        if action == "update_stack":
+            return await deck_client.update_stack(
+                clients.client, clients.creds, board_id, stack_id, title=title or None, order=order
+            )
+        if not config.deck_delete_enabled():
+            raise ToolError(
+                message="Deck deletion is disabled by the administrator.",
+                hint=f"Enable {config.ENV_DECK_DELETE} and restart the connector.",
+            )
+        deleted = await deck_client.delete_empty_stack(
+            clients.client, clients.creds, board_id, stack_id, expected_title=expected_title
+        )
+        return {"deleted": True, "stack_id": stack_id, "title": expected_title, "server": deleted}
 
     if not stack_id.strip() or not card_id.strip():
         raise ToolError(
@@ -189,15 +229,28 @@ async def manage(
             title=title or None,
             description=description,
             duedate=duedate,
+            color=color,
         )
-    if action == "move_card":
+    if action in {"move_card", "reorder_card"}:
+        if action == "reorder_card" and order is None:
+            raise ToolError(message="reorder_card needs order.", hint="Use 0 for the top position.")
         return await deck_client.move_card(
             clients.client,
             clients.creds,
             board_id,
             stack_id,
             card_id,
-            target_stack_id=target_stack_id,
+            target_stack_id=stack_id if action == "reorder_card" else target_stack_id,
+            order=order if order is not None else deck_client.DEFAULT_CARD_ORDER,
+        )
+    if action in {"archive_card", "unarchive_card"}:
+        return await deck_client.set_card_archived(
+            clients.client,
+            clients.creds,
+            board_id,
+            stack_id,
+            card_id,
+            archived=action == "archive_card",
         )
     if action in {"assign_label", "remove_label"}:
         return await deck_client.set_card_label(
@@ -236,6 +289,53 @@ async def manage(
     }
 
 
+async def _set_card_colors(
+    clients: NcClients, board_id: str, cards: list[dict[str, Any]] | None
+) -> dict[str, Any]:
+    """Validate the whole bounded batch before writes; report server failures per card."""
+    if not isinstance(cards, list) or not 1 <= len(cards) <= 25:
+        raise ToolError(
+            message="cards must contain 1 to 25 color updates.",
+            hint="Each entry needs stack_id, card_id and color.",
+        )
+    seen: set[str] = set()
+    normalized = []
+    for item in cards:
+        if not isinstance(item, dict) or set(item) != {"stack_id", "card_id", "color"}:
+            raise ToolError(
+                message="Each color entry needs exactly stack_id, card_id and color.",
+                hint="Other card fields are not changed by this action.",
+            )
+        stack, card = str(item["stack_id"]), str(item["card_id"])
+        if (
+            not stack
+            or not card
+            or any(c not in "0123456789" for c in stack + card)
+            or card in seen
+        ):
+            raise ToolError(
+                message="Invalid or duplicate card id in color batch.",
+                hint="Use canonical ids and list each card only once.",
+            )
+        deck_client.check_card_color(item["color"])
+        seen.add(card)
+        normalized.append((stack, card, item["color"]))
+    results = []
+    for stack, card, color in normalized:
+        try:
+            updated = await deck_client.update_card(
+                clients.client, clients.creds, board_id, stack, card, color=color
+            )
+            results.append({"card_id": card, "ok": True, "color": updated.get("color")})
+        except ToolError as exc:
+            results.append({"card_id": card, "ok": False, "error": exc.message})
+    return {
+        "results": results,
+        "updated": sum(item["ok"] for item in results),
+        "failed": sum(not item["ok"] for item in results),
+    }
+
+
 async def _boards(clients: NcClients) -> list[dict[str, Any]]:
     """Board ids and titles, plus whether the user may write to them at all."""
     boards = await deck_client.get_boards(clients.client, clients.creds)
@@ -257,6 +357,7 @@ def _stack(stack: dict[str, Any]) -> dict[str, Any]:
         "id": stack.get("id"),
         "title": str(stack.get("title") or ""),
         "cards": len(cards) if isinstance(cards, list) else 0,
+        "order": stack.get("order"),
     }
 
 
@@ -265,6 +366,8 @@ def _cards(
     board: str,
     stacks: list[dict[str, Any]],
     stack_filter: str,
+    *,
+    archived: bool = False,
 ) -> list[dict[str, Any]]:
     """Flatten the cards Deck already sent, optionally narrowed to one stack."""
     if stack_filter:
@@ -282,7 +385,11 @@ def _cards(
         if not isinstance(cards, list):
             continue
         for card in cards:
-            if not isinstance(card, dict) or card.get("deletedAt") or card.get("archived"):
+            if (
+                not isinstance(card, dict)
+                or card.get("deletedAt")
+                or (card.get("archived") and not archived)
+            ):
                 continue
             card_id = card.get("id")
             # A card without an id or without a stack cannot be addressed again later, and
@@ -295,6 +402,9 @@ def _cards(
                 "title": str(card.get("title") or ""),
                 "stack": str(stack.get("title") or ""),
                 "url": deck_client.web_url(clients.creds, card_id),
+                "color": card.get("color"),
+                "order": card.get("order"),
+                "archived": bool(card.get("archived")),
             }
             if card.get("duedate"):
                 entry["duedate"] = card["duedate"]

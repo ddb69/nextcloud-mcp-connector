@@ -218,6 +218,53 @@ async def test_update_card_preserves_required_fields_and_changes_selected_ones(
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("color", "expected"),
+    [
+        (None, "112233"),
+        ("#2d73be", "2D73BE"),
+        ("ffffff", "FFFFFF"),
+        ("000000", "000000"),
+        ("", None),
+    ],
+)
+async def test_update_card_sets_clears_or_preserves_color_without_changing_other_fields(
+    client: httpx.AsyncClient, creds: Credentials, color: str | None, expected: str | None
+) -> None:
+    current = {
+        **CREATED_CARD,
+        "id": 101,
+        "color": "112233",
+        "order": 4,
+        "duedate": "2026-10-30T17:00:00+00:00",
+        "archived": False,
+        "labels": [{"id": 7}],
+        "assignedUsers": [{"uid": "alice"}],
+    }
+    with respx.mock(assert_all_called=True) as mock:
+        mock.get(f"{CARDS_URL}/101").respond(200, json=current)
+        route = mock.put(f"{DECK_APP_BASE}/cards/101").respond(
+            200, json={**current, "color": expected}
+        )
+        await deck_client.update_card(client, creds, 2, 11, 101, color=color)
+    body = json.loads(route.calls[0].request.content)
+    assert body["color"] == expected
+    for key in ("title", "description", "order", "duedate", "archived", "labels", "assignedUsers"):
+        assert body[key] == current[key]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("color", ["#", "red", "fff", "11223344", "GG0000", "#123456;display:none"])
+async def test_update_card_rejects_invalid_color_before_any_request(
+    client: httpx.AsyncClient, creds: Credentials, color: str
+) -> None:
+    with respx.mock(assert_all_called=False) as mock:
+        with pytest.raises(ToolError):
+            await deck_client.update_card(client, creds, 2, 11, 101, color=color)
+        assert not mock.calls
+
+
+@pytest.mark.anyio
 async def test_move_card_uses_the_web_reorder_endpoint_and_reads_the_target(
     client: httpx.AsyncClient, creds: Credentials
 ) -> None:
@@ -256,6 +303,7 @@ async def test_create_stack_label_and_assign_label_use_the_documented_routes(
         assigned = mock.put(f"{CARDS_URL}/101/assignLabel").mock(
             return_value=httpx.Response(200, json={**CREATED_CARD, "id": 101})
         )
+        mock.get(f"{CARDS_URL}/101").respond(200, json={**CREATED_CARD, "id": 101, "labels": []})
         await deck_client.create_stack(client, creds, 2, title="Plan")
         await deck_client.create_label(client, creds, 2, title="Strategy", color="#0082c9")
         await deck_client.set_card_label(client, creds, 2, 11, 101, label_id=7, assigned=True)
@@ -424,7 +472,11 @@ def test_the_module_has_no_implicit_convenience_delete_helper() -> None:
     source = Path(deck_client.__file__).read_text(encoding="utf-8")
     assert ".delete(" not in source
     assert ".patch(" not in source
-    assert source.count('"DELETE"') == 1
+    assert source.count('"DELETE"') == 2
+    import inspect
+
+    assert inspect.getsource(deck_client.delete_card).count('"DELETE"') == 1
+    assert inspect.getsource(deck_client.delete_empty_stack).count('"DELETE"') == 1
 
 
 def test_the_module_reads_deck_errors_with_the_app_json_parser() -> None:

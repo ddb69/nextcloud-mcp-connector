@@ -34,6 +34,9 @@ async def deck_browse(
     limit: Annotated[
         int, Field(ge=1, le=deck_tools.MAX_LIMIT, description="Maximum number of entries")
     ] = deck_tools.DEFAULT_LIMIT,
+    archived: Annotated[
+        bool, Field(description="List archived cards instead of active cards")
+    ] = False,
     ctx: Context | None = None,
 ) -> str:
     """List Deck boards, the stacks of a board, or its cards."""
@@ -45,6 +48,7 @@ async def deck_browse(
             board_id=board_id or None,
             stack_id=stack_id or None,
             limit=limit,
+            archived=archived,
         )
     )
 
@@ -82,7 +86,13 @@ async def deck_manage(
         Literal[
             "update_card",
             "move_card",
+            "reorder_card",
+            "archive_card",
+            "unarchive_card",
+            "set_card_colors",
             "create_stack",
+            "update_stack",
+            "delete_stack",
             "create_label",
             "assign_label",
             "remove_label",
@@ -96,7 +106,11 @@ async def deck_manage(
         Field(
             description=(
                 "JSON object: stack_id, card_id, title, description, duedate, "
-                "target_stack_id, label_id, color or expected_title"
+                "target_stack_id, label_id, color or expected_title. "
+                "update_card: color sets six hex digits; an empty string clears it; "
+                "omission preserves it. order: nonnegative position, 0 is top. "
+                "delete_stack: empty only, needs expected_title. set_card_colors: cards array "
+                "of 1-25 {stack_id, card_id, color} entries for this board"
             )
         ),
     ] = "{}",
@@ -127,7 +141,9 @@ async def deck_manage(
             duedate=supplied.get("duedate"),
             target_stack_id=str(supplied.get("target_stack_id") or ""),
             label_id=str(supplied.get("label_id") or ""),
-            color=str(supplied.get("color") or ""),
+            color=None if "color" not in supplied else str(supplied.get("color") or ""),
             expected_title=str(supplied.get("expected_title") or ""),
+            order=supplied.get("order"),
+            cards=supplied.get("cards"),
         )
     )
