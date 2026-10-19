@@ -32,8 +32,9 @@ You bring the model, and no content leaves your server.
 
 ## What this server cannot do by default
 
-- No deleting unless an administrator enables both Deck management and Deck deletion; even
-  then only Deck cards can be deleted and their exact current title must be confirmed
+- No deleting unless an administrator enables both Deck management and Deck deletion; only
+  cards and empty stacks can be soft-deleted, with their exact current title confirmed.
+  Stack deletion also checks for cards put aside and refuses a nonempty stack
 - No overwriting outside the separately enabled Deck management mode; `files_upload` still
   refuses an existing path instead of replacing it
 - No moving or renaming outside enabled Deck card moves, no share changes and no permission changes
@@ -77,6 +78,11 @@ name or a level disagrees with it.
 | `prepare_context` | read | Files, notes, cards, the next week of events, waiting Talk conversations and unread mail counts in one call |
 | `search` | read | OpenAI compatible search entry point, delegates to unified search |
 | `fetch` | read | OpenAI compatible fetch, resolves an id to a file, note, card, event, mail, Talk message or table |
+
+Deck management also supports card colors, explicit card positions, stack rename/reorder,
+putting cards aside/restoring them and batches of up to 25 color updates. Omitted fields are preserved.
+Label assignment and removal are idempotent and return refreshed card data. See
+[Deck management examples](docs/deck-management.md).
 
 `search` and `fetch` exist because the ChatGPT connector profile requires exactly these two
 names and schemas. They are thin wrappers over the tools above, not a second implementation.

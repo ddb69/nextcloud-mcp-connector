@@ -347,6 +347,12 @@ def _violations(relative: str, lines: Iterable[tuple[int, str]]) -> list[str]:
                 continue
             if needle == "DELETE" and _is_opt_in_deck_management(relative, text):
                 continue
+            if (
+                needle == "/archive"
+                and relative == "nextcloud/clients/deck.py"
+                and text.strip() == 'ARCHIVED_STACKS_SUFFIX = "/archived"'
+            ):
+                continue
             if needle in TABLES_READ_NEEDLES and _is_a_tables_read(relative, text):
                 continue
             findings.append(f"{relative}:{number}: {needle!r} ({why}): {text.strip()}")

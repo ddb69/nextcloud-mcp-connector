@@ -23,7 +23,7 @@ web client.
 - Moving a card between stacks uses the working web-client reorder route, preserves the
   complete card and reads it back from the target stack.
 - Updating an existing card uses the web-client update route and preserves required and
-  unknown card fields, including labels, ordering and archival state.
+  unknown card fields, including labels, ordering and whether cards are put aside.
 - Regression tests cover both Deck request and response flows.
 - The destructive-call contract recognises the existing administrator-gated Deck deletion
   switch in the ExApp entry point without permitting an additional deletion call.

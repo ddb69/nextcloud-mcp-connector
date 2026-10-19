@@ -117,8 +117,8 @@ async def test_browse_stacks_reports_card_counts_and_not_card_lists(
 
     assert stacks.call_count == 1
     assert result["results"] == [
-        {"id": 11, "title": "To Do", "cards": 2},
-        {"id": 12, "title": "Erledigt", "cards": 1},
+        {"id": 11, "title": "To Do", "cards": 2, "order": 0},
+        {"id": 12, "title": "Erledigt", "cards": 1, "order": 1},
     ]
 
 
@@ -271,6 +271,22 @@ async def test_management_is_off_unless_the_administrator_enables_it(
     with pytest.raises(ToolError) as excinfo:
         await deck_tools.manage(clients, "create_stack", "2", title="Plan")
     assert "disabled" in excinfo.value.message.lower()
+
+
+@pytest.mark.anyio
+async def test_manage_update_card_passes_color_to_the_client(
+    clients: NcClients, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("NC_MCP_DECK_MANAGE", "on")
+    current = {"id": 101, "title": "Keep title", "stackId": 11, "color": None}
+    with respx.mock(assert_all_called=True) as mock:
+        mock_capabilities(mock)
+        mock.get(f"{CARDS_URL}/101").respond(200, json=current)
+        route = mock.put(f"{BASE}/index.php/apps/deck/cards/101").respond(
+            200, json={**current, "color": "FFFFFF"}
+        )
+        await deck_tools.manage(clients, "update_card", "2", "11", "101", color="#ffffff")
+    assert json.loads(route.calls[0].request.content)["color"] == "FFFFFF"
 
 
 @pytest.mark.anyio

@@ -22,9 +22,9 @@ cheaper than a 400 and its message is better:
 * a title is trimmed, must not be empty and must not exceed 255 characters (threat T-01-67)
 * a due date must be an ISO-8601 timestamp
 
-There is deliberately no update, no delete and no board or stack write in this module. The
-server promise is that it can neither overwrite nor remove anything, and the cheapest way
-to keep it is to never write the code that could break it (threat T-01-62).
+Write paths are exposed only by the administratively gated Deck management tool. Card and
+empty-stack deletion use explicit request verbs and require separate deletion opt-in and
+exact-title confirmation in the tool. No board-sharing or permission writes are implemented.
 """
 
 from collections.abc import Mapping
@@ -49,6 +49,8 @@ DECK_APP_PREFIX = "/index.php/apps/deck"
 
 #: Web route of a single card (``deck.page.redirectToCard``), used for the ``url`` field.
 DECK_WEB_PREFIX = "/index.php/apps/deck/card"
+
+ARCHIVED_STACKS_SUFFIX = "/archived"
 
 #: Deck rejects a longer title with a 400. The limit is checked before the request.
 MAX_TITLE_LENGTH = 255
@@ -116,7 +118,7 @@ async def get_board(
 
 
 async def get_stacks(
-    client: httpx.AsyncClient, creds: Credentials, board_id: str | int
+    client: httpx.AsyncClient, creds: Credentials, board_id: str | int, *, archived: bool = False
 ) -> list[dict[str, Any]]:
     """List the stacks of a board; the answer already contains their cards.
 
@@ -125,7 +127,7 @@ async def get_stacks(
     """
     board = _path_id(board_id, "board id")
     response = await client.get(
-        api_url(creds, f"/boards/{board}/stacks"),
+        api_url(creds, f"/boards/{board}/stacks" + (ARCHIVED_STACKS_SUFFIX if archived else "")),
         headers=dict(DECK_HEADERS),
         auth=creds.auth(),
     )
@@ -195,8 +197,10 @@ async def update_card(
     title: str | None = None,
     description: str | None = None,
     duedate: str | None = None,
+    color: str | None = None,
 ) -> dict[str, Any]:
     """Update selected card fields while preserving the complete Deck update contract."""
+    normalized_color = check_card_color(color) if color is not None else None
     board, stack, card = _card_path(board_id, stack_id, card_id)
     current = await get_card(client, creds, board, stack, card)
     body = {
@@ -213,6 +217,8 @@ async def update_card(
         if duedate
         else (None if duedate == "" else current.get("duedate")),
     }
+    if color is not None:
+        body["color"] = normalized_color
     response = await client.put(
         app_url(creds, f"/cards/{card}"),
         json=body,
@@ -235,6 +241,7 @@ async def move_card(
     """Move a card through the reorder endpoint used by Deck's web client."""
     board, stack, card = _card_path(board_id, stack_id, card_id)
     target = _path_id(target_stack_id, "target stack id")
+    check_order(order)
 
     current = await get_card(client, creds, board, stack, card)
     body = {
@@ -252,6 +259,141 @@ async def move_card(
     ocs.parse_app_json(response, what=f"the moved card {card}")
 
     return await get_card(client, creds, board, target, card)
+
+
+def check_card_color(color: str) -> str | None:
+    if not isinstance(color, str):
+        raise ToolError(
+            message="Card color must be a string.",
+            hint="Use six hex digits or an empty string to clear the color.",
+        )
+    normalized = color.strip().removeprefix("#")
+    if color.strip() and (
+        len(normalized) != 6 or any(char not in "0123456789abcdefABCDEF" for char in normalized)
+    ):
+        raise ToolError(
+            message=f"{color!r} is not a six-digit hex color.",
+            hint="Use six hex digits or an empty string to clear the color.",
+        )
+    return normalized.upper() or None
+
+
+def check_order(order: int) -> int:
+    """Deck positions are nonnegative integers; bool is not a position."""
+    if isinstance(order, bool) or not isinstance(order, int) or order < 0:
+        raise ToolError(
+            message="order must be a nonnegative integer.", hint="Use 0 for the top position."
+        )
+    return order
+
+
+async def update_stack(
+    client: httpx.AsyncClient,
+    creds: Credentials,
+    board_id: str | int,
+    stack_id: str | int,
+    *,
+    title: str | None = None,
+    order: int | None = None,
+) -> dict[str, Any]:
+    board, stack = _path_id(board_id, "board id"), _path_id(stack_id, "stack id")
+    if order is not None:
+        check_order(order)
+    stacks = await get_stacks(client, creds, board)
+    current = next((item for item in stacks if str(item.get("id")) == stack), None)
+    if current is None:
+        raise ToolError(
+            message=f"Board {board} has no stack {stack}.", hint="Read the board's stacks first."
+        )
+    response = await client.put(
+        api_url(creds, f"/boards/{board}/stacks/{stack}"),
+        json={
+            "title": check_title(title if title is not None else str(current.get("title") or "")),
+            "order": order if order is not None else current.get("order", DEFAULT_CARD_ORDER),
+        },
+        headers=dict(DECK_HEADERS),
+        auth=creds.auth(),
+    )
+    return _as_dict(ocs.parse_app_json(response, what=f"the updated stack {stack}"), what="a stack")
+
+
+async def delete_empty_stack(
+    client: httpx.AsyncClient,
+    creds: Credentials,
+    board_id: str | int,
+    stack_id: str | int,
+    *,
+    expected_title: str,
+) -> dict[str, Any]:
+    """Soft-delete only a confirmed empty stack, counting archived cards as well."""
+    board, stack = _path_id(board_id, "board id"), _path_id(stack_id, "stack id")
+    for archived in (False, True):
+        stacks = await get_stacks(client, creds, board, archived=archived)
+        current = next((item for item in stacks if str(item.get("id")) == stack), None)
+        if current is None:
+            raise ToolError(
+                message=f"Board {board} has no stack {stack}.",
+                hint="Read the board's stacks first.",
+            )
+        if not expected_title or current.get("title") != expected_title:
+            raise ToolError(
+                message="Stack deletion title does not match.",
+                hint="Set expected_title to the exact current stack title.",
+            )
+        if not isinstance(current.get("cards"), list) or current["cards"]:
+            raise ToolError(
+                message="Only an empty stack can be deleted, including archived cards.",
+                hint="Move its cards first; no cards are deleted by this action.",
+            )
+    response = await client.request(
+        "DELETE",
+        api_url(creds, f"/boards/{board}/stacks/{stack}"),
+        headers=dict(DECK_HEADERS),
+        auth=creds.auth(),
+    )
+    return _as_dict(ocs.parse_app_json(response, what=f"the deleted stack {stack}"), what="a stack")
+
+
+async def set_card_archived(
+    client: httpx.AsyncClient,
+    creds: Credentials,
+    board_id: str | int,
+    stack_id: str | int,
+    card_id: str | int,
+    *,
+    archived: bool,
+) -> dict[str, Any]:
+    """Resolve through stack listings, which also work for archived cards."""
+    board, stack, card = _card_path(board_id, stack_id, card_id)
+    for source_archived in (not archived, archived):
+        stacks = await get_stacks(client, creds, board, archived=source_archived)
+        current_stack = next((item for item in stacks if str(item.get("id")) == stack), {})
+        current = next(
+            (
+                item
+                for item in current_stack.get("cards", [])
+                if str(item.get("id")) == card and not item.get("deletedAt")
+            ),
+            None,
+        )
+        if current is None:
+            continue
+        if source_archived == archived:
+            return current
+        operation = "archive" if archived else "unarchive"
+        response = await client.put(
+            api_url(creds, f"/boards/{board}/stacks/{stack}/cards/{card}/{operation}"),
+            json={},
+            headers=dict(DECK_HEADERS),
+            auth=creds.auth(),
+        )
+        return _as_dict(
+            ocs.parse_app_json(response, what=f"the {operation}d card {card}"), what="a card"
+        )
+    raise ToolError(
+        message=f"Card {card} was not found in board {board}, stack {stack}.",
+        hint="Read active or archived cards to obtain its current location.",
+    )
 
 
 async def create_stack(
@@ -308,13 +450,18 @@ async def set_card_label(
     board, stack, card = _card_path(board_id, stack_id, card_id)
     label = _path_id(label_id, "label id")
     operation = "assignLabel" if assigned else "removeLabel"
+    current = await get_card(client, creds, board, stack, card)
+    present = any(str(item.get("id")) == label for item in current.get("labels", []))
+    if present == assigned:
+        return current
     response = await client.put(
         api_url(creds, f"/boards/{board}/stacks/{stack}/cards/{card}/{operation}"),
         json={"labelId": int(label)},
         headers=dict(DECK_HEADERS),
         auth=creds.auth(),
     )
-    return _as_dict(ocs.parse_app_json(response, what=f"the relabelled card {card}"), what="a card")
+    ocs.parse_app_json(response, what=f"the relabelled card {card}")
+    return await get_card(client, creds, board, stack, card)
 
 
 async def delete_card(
