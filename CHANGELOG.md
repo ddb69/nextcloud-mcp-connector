@@ -13,6 +13,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Nothing here is released.
 
+## [0.2.9] - 2026-10-19
+
+### Added
+
+- Card colors, including validated batches of up to 25 cards.
+- Explicit card and stack ordering, stack renaming and guarded empty-stack deletion.
+- Listing, putting aside and restoring cards while retaining their data.
+- Documentation for the extended Deck management operations.
+
+### Fixed
+
+- Label assignment and removal are idempotent and return refreshed card data.
+
+### Deployment
+
+- Version declarations and the image tag are aligned at 0.2.9 for the existing
+  local Docker build and AppAPI update workflow.
+
 ## [0.2.8] - 2026-09-23
 
 Deck card management now follows the routes and request contracts used by the Deck 1.19
